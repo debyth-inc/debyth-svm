@@ -5,12 +5,11 @@ use anchor_lang::prelude::*;
 pub struct Mandate {
     // The unique identifier for the mandate
     pub id: u64,
-    // The business that created the mandate
-    pub owner: Pubkey,
+    // Coindebit is the authority of the mandate, here we save the Coindebit key that created the mandate
+    pub authority: Pubkey,
     // The user that approves the mandate
     pub user: Pubkey,
-    // The expiry time of the mandate
-    pub expiry_time: i64,
+
     // The time the mandate was created
     pub created_at: i64,
     // Whether the mandate is active or not
@@ -21,7 +20,19 @@ pub struct Mandate {
     // if variable it will be the total amount for the lifetime of the mandate
     pub amount: u64,
 
+    // Whether the mandate is approved or not
     pub is_approved: bool,
+
+    // The time the mandate was approved
+    pub approved_at: i64,
+
+    // The start date of the mandate
+    pub start_date: i64,
+    // The end date of the mandate
+    pub end_date: i64,
+
+    // If the mandate is cancelled, this will be the time it was cancelled
+    pub cancelled_at: i64,
 
     pub mint: Pubkey,
 
@@ -33,7 +44,6 @@ pub struct Mandate {
     // The frequency of the debit, in seconds
     pub frequency: Frequency,
 
-    pub seed: u64,
     pub bump: u8,
 }
 
