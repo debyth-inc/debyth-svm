@@ -61,8 +61,8 @@ impl<'info> ApproveMandate<'info> {
         let cpi_program = self.token_program.to_account_info();
 
         let cpi_accounts = Approve {
-            to: self.user_token_account.to_account_info(),
-            authority: self.user.to_account_info(),
+            to: self.user_token_account.to_account_info(), // the token account of the user that will be debited
+            authority: self.user.to_account_info(),        // the user that will approve the mandate
             delegate: self.mandate.to_account_info(),
         };
 
@@ -76,7 +76,7 @@ impl<'info> ApproveMandate<'info> {
         self.mandate.user_token_account = self.user_token_account.key();
         self.mandate.destination_token_account = self.authority_token_account.key();
         self.mandate.is_active = true;
-        self.mandate.created_at = Clock::get()?.unix_timestamp;
+        self.mandate.approved_at = Clock::get()?.unix_timestamp;
 
         Ok(())
     }
