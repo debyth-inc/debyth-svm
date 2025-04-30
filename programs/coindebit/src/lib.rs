@@ -13,7 +13,10 @@ use instructions::*;
 pub mod mandate {
     use super::*;
 
-    pub fn create_mandate(ctx: Context<CreateMandate>, expiry_time: i64) -> Result<()> {
+    pub fn create_and_approve_mandate(
+        ctx: Context<CreateAndApproveMandate>,
+        expiry_time: i64,
+    ) -> Result<()> {
         Ok(())
     }
     pub fn execute_transfer(
@@ -24,9 +27,6 @@ pub mod mandate {
         Ok(())
     }
     pub fn modify_mandate(ctx: Context<ModifyMandate>, state: bool, mandate_id: u64) -> Result<()> {
-        Ok(())
-    }
-    pub fn approve_mandate(ctx: Context<ApproveMandate>, mandate_id: u64) -> Result<()> {
         Ok(())
     }
     pub fn cancel_mandate(ctx: Context<CancelMandate>, mandate_id: u64) -> Result<()> {
