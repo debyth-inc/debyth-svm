@@ -3,7 +3,7 @@ use anchor_spl::token_interface::{
     transfer_checked, Mint, TokenAccount, TokenInterface, TransferChecked,
 };
 
-use crate::state::state::{DebitType, Frequency, Mandate};
+use crate::state::state::{DebitType, Mandate};
 
 #[derive(Accounts)]
 pub struct ExecuteMandate<'info> {
@@ -11,7 +11,7 @@ pub struct ExecuteMandate<'info> {
 
     #[account(
         mut,
-        seeds = [b"mandate", authority.key().as_ref(), mandate.id.to_le_bytes().as_ref()],
+        seeds = [b"mandate", mandate.id.to_le_bytes().as_ref()],
         bump = mandate.bump,
         constraint = mandate.authority == authority.key() @ MandateError::InvalidAuthority,
         constraint = mandate.is_active @ MandateError::MandateNotActive,
@@ -30,7 +30,7 @@ pub struct ExecuteMandate<'info> {
         associated_token::mint = mint,
         associated_token::authority = mandate.user,
         associated_token::token_program = token_program,
-        constraint = user_token_account.key() == mandate.user_token_account @ MandateError::InvalidTokenAccount,
+        // constraint = user_token_account.key() == mandate.user_token_account @ MandateError::InvalidTokenAccount,
     )]
     pub user_token_account: InterfaceAccount<'info, TokenAccount>,
 
@@ -39,7 +39,7 @@ pub struct ExecuteMandate<'info> {
         associated_token::mint = mint,
         associated_token::authority = mandate.authority,
         associated_token::token_program = token_program,
-        constraint = destination_token_account.key() == mandate.destination_token_account @ MandateError::InvalidTokenAccount,
+        // constraint = destination_token_account.key() == mandate.destination_token_account @ MandateError::InvalidTokenAccount,
     )]
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
 
@@ -50,53 +50,47 @@ pub struct ExecuteMandate<'info> {
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct ExecuteMandateArgs {
     pub amount: u64,
-    pub debit_type: DebitType,
-    pub frequency: Frequency,
 }
 
 impl<'info> ExecuteMandate<'info> {
-    pub fn execute_withdraw(&mut self, mandate_id: u64, args: ExecuteMandateArgs) -> Result<()> {
+    pub fn execute(&mut self, args: ExecuteMandateArgs) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
-
-        // Check if the mandate is expired
-        require!(self.mandate.end_date >= now, MandateError::MandateExpired);
-
-        if args.debit_type == DebitType::Fixed {
-            require!(
-                self.mandate.amount == args.amount,
-                MandateError::CanNotDebitThisAmount
-            );
-        } else if args.debit_type == DebitType::Variable {
-            require!(
-                self.mandate.total_debited_amount + args.amount <= self.mandate.amount,
-                MandateError::CanNotDebitThisAmount
-            );
-
-            require!(
-                self.mandate.amount_per_debit <= args.amount,
-                MandateError::CanNotDebitThisAmount
-            );
-        }
-        // Check if the mandate is active
+        
+        // Basic mandate validation
         require!(self.mandate.is_active, MandateError::MandateNotActive);
-        // Check if the mandate is approved
         require!(self.mandate.is_approved, MandateError::MandateNotApproved);
-        // Check if the user token account is owned by the user
+
+        // Amount validation based on debit type
+        match self.mandate.debit_type {
+            DebitType::Fixed => {
+                require!(
+                    self.mandate.amount == args.amount,
+                    MandateError::InvalidAmountForFixedDebit
+                );
+            },
+            DebitType::Variable => {
+                require!(
+                    args.amount <= self.mandate.amount,
+                    MandateError::InvalidAmountForVariableDebit
+                );
+            }
+        }
+
+        // Token account validation
         require!(
             self.user_token_account.owner == self.mandate.user,
             MandateError::InvalidTokenAccount
         );
-        // Check if the user token account mint is the same as the mandate mint
         require!(
             self.user_token_account.mint == self.mint.key(),
             MandateError::InvalidMint
         );
 
-        let cpi_program = self.token_program.to_account_info();
+        // Execute the transfer
+       let cpi_program = self.token_program.to_account_info();
         let seeds: &[&[u8]] = &[
             b"mandate",
-            self.authority.key.as_ref(),
-            &mandate_id.to_le_bytes(),
+            &self.mandate.id.to_le_bytes(),
             &[self.mandate.bump],
         ];
         let signer = &[&seeds[..]];
@@ -108,7 +102,7 @@ impl<'info> ExecuteMandate<'info> {
                     from: self.user_token_account.to_account_info(),
                     to: self.destination_token_account.to_account_info(),
                     mint: self.mint.to_account_info(),
-                    authority: self.mandate.to_account_info(), // using the PDA account info
+                    authority: self.mandate.to_account_info(),
                 },
                 signer,
             ),
@@ -116,12 +110,12 @@ impl<'info> ExecuteMandate<'info> {
             self.mint.decimals,
         )?;
 
-        self.mandate.total_debited_amount += args.amount;
-        self.mandate.last_debit = now;
-        self.mandate.last_debit_amount = args.amount;
+        // Update last execution
+        self.mandate.last_execution = now;
 
         Ok(())
     }
+
 }
 
 #[error_code]
@@ -130,20 +124,14 @@ pub enum MandateError {
     MandateNotActive,
     #[msg("Mandate is not approved")]
     MandateNotApproved,
-    #[msg("Mandate has expired")]
-    MandateExpired,
     #[msg("Invalid authority")]
     InvalidAuthority,
     #[msg("Invalid mint account")]
     InvalidMint,
     #[msg("Invalid token account")]
     InvalidTokenAccount,
-    #[msg("Not ready for debit")]
-    NotReadyForDebit,
     #[msg("Invalid amount for fixed debit")]
     InvalidAmountForFixedDebit,
     #[msg("Invalid amount for variable debit")]
     InvalidAmountForVariableDebit,
-    #[msg("Can not debit this amount")]
-    CanNotDebitThisAmount,
 }

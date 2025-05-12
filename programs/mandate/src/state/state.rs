@@ -1,50 +1,33 @@
 use anchor_lang::prelude::*;
 
 #[account]
-#[derive(InitSpace)]
 pub struct Mandate {
-    // Core fields
-    pub id: u64,
-    pub authority: Pubkey,
-    pub user: Pubkey,
-    pub bump: u8,
-
-    // Token related fields
-    pub mint: Pubkey,
-    pub user_token_account: Pubkey,
-    pub destination_token_account: Pubkey,
-
-    // Configuration
-    pub amount: u64,
-    pub amount_per_debit: u64,
-    pub frequency: Frequency,
-    pub debit_type: DebitType,
-
-    // Time-related fields
-    pub created_at: i64,
-    pub start_date: i64,
-    pub end_date: i64,
-
-    // Status fields
-    pub is_approved: bool,
-    pub is_active: bool,
-    pub approved_at: i64,
-    pub cancelled_at: i64,
-
-    // Debit tracking
-    pub last_debit: i64,
-    pub last_debit_amount: u64,
-    pub total_debited_amount: u64,
+    // Essential on-chain data
+    pub id: u64,               // Required for PDA
+    pub authority: Pubkey,     // Required for validation
+    pub user: Pubkey,          // Required for validation
+    pub bump: u8,              // Required for PDA
+    pub mint: Pubkey,          // Required for token operations
+    pub amount: u64,           // Required for debit cap
+    pub debit_type: DebitType, // Required for validation
+    pub is_approved: bool,     // Required state
+    pub is_active: bool,       // Required state
+    pub last_execution: i64,   // Required for frequency validation
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, InitSpace)]
-pub enum Frequency {
-    Daily = 0,
-    Weekly = 1,
-    Monthly = 2,
-    Annually = 3,
+impl Mandate {
+    pub const INIT_SPACE: usize = 8 +        // discriminator
+        8 +                                   // id
+        32 +                                  // authority
+        32 +                                  // user
+        1 +                                   // bump
+        32 +                                  // mint
+        8 +                                   // amount
+        1 +                                   // debit_type
+        1 +                                   // is_approved
+        1 +                                   // is_active
+        8; // last_execution
 }
-
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, InitSpace)]
 pub enum DebitType {
     Fixed = 0,

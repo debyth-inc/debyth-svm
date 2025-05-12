@@ -3,30 +3,27 @@ use anchor_spl::token_interface::{revoke, Mint, Revoke, TokenAccount, TokenInter
 
 use crate::state::state::Mandate;
 
-/// Accounts for cancelling a mandate and revoking token approval
 #[derive(Accounts)]
 pub struct CancelMandate<'info> {
-    /// The user who owns the mandate and is authorized to cancel it
     #[account(mut)]
     pub user: Signer<'info>,
 
-    /// The mandate account to be cancelled and closed
+    pub authority: SystemAccount<'info>,
+
     #[account(
         mut,
         close = user,
-        seeds = [b"mandate", user.key().as_ref(), mandate.id.to_le_bytes().as_ref()],
+        seeds = [b"mandate", mandate.id.to_le_bytes().as_ref()],
         bump = mandate.bump,
         constraint = mandate.user == user.key() @ ManageError::UnauthorizedOwner,
     )]
     pub mandate: Account<'info, Mandate>,
 
-    /// The token mint
     #[account(
         mint::token_program = token_program
     )]
     pub mint: InterfaceAccount<'info, Mint>,
 
-    /// The user's token account that has the approval to be revoked
     #[account(
         mut,
         associated_token::mint = mint,
@@ -41,38 +38,16 @@ pub struct CancelMandate<'info> {
 }
 
 impl<'info> CancelMandate<'info> {
-    /// Cancels an existing mandate and revokes token approval
-    ///
-    /// # Errors
-    /// - If the mandate is already active or approved
-    /// - If the mandate is already cancelled
-    /// - If the mandate is expired
-    /// - If the signer is not the mandate owner
     pub fn cancel(&mut self) -> Result<()> {
-        // Verify mandate owner (redundant if account constraint is used, but included for runtime safety)
+        // Verify mandate owner (redundant with account constraint, but kept for safety)
         require_keys_eq!(
             self.user.key(),
             self.mandate.user,
             ManageError::UnauthorizedOwner
         );
 
-        // Ensure the mandate isn’t already cancelled
-        require!(
-            self.mandate.cancelled_at == 0,
-            ManageError::MandateAlreadyCancelled
-        );
-
-        // Verify mandate status: cancellation should only proceed if mandate is not active and not approved.
-        require!(self.mandate.is_active, ManageError::MandateAlreadyInActive);
-
-        // Obtain the current timestamp once and reuse it
-        let clock = Clock::get()?;
-
-        // Check if the mandate is expired
-        require!(
-            self.mandate.end_date >= clock.unix_timestamp,
-            ManageError::MandateExpired
-        );
+        // Verify mandate status
+        require!(self.mandate.is_approved, ManageError::MandateNotApproved);
 
         // Revoke token approval
         let cpi_program = self.token_program.to_account_info();
@@ -85,12 +60,13 @@ impl<'info> CancelMandate<'info> {
 
         // Update mandate state
         self.mandate.is_active = false;
-        self.mandate.cancelled_at = clock.unix_timestamp;
+        self.mandate.is_approved = false;
+        self.mandate.last_execution = Clock::get()?.unix_timestamp;
 
-        // Emit an event for the cancellation
+        // Emit cancellation event
         emit!(MandateCancelled {
             mandate_id: self.mandate.id,
-            cancelled_at: clock.unix_timestamp,
+            cancelled_at: Clock::get()?.unix_timestamp,
         });
 
         Ok(())
@@ -107,10 +83,6 @@ pub struct MandateCancelled {
 pub enum ManageError {
     #[msg("Only the mandate owner can perform this action")]
     UnauthorizedOwner,
-    #[msg("Mandate is already inactive")]
-    MandateAlreadyInActive,
-    #[msg("Mandate has expired")]
-    MandateExpired,
-    #[msg("Mandate was already cancelled")]
-    MandateAlreadyCancelled,
+    #[msg("Mandate is not approved")]
+    MandateNotApproved,
 }

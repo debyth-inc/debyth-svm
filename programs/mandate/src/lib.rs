@@ -2,7 +2,7 @@
 
 use anchor_lang::prelude::*;
 
-declare_id!("6mBVkki6chiDDMULzWNjPQmM52dc5fRdnH5d3MShMBPr");
+declare_id!("ATMswjeXjUGfkxSo94seuuX4HLXcPwePdjnJc9FCvMaC");
 
 mod instructions;
 mod state;
@@ -14,7 +14,7 @@ pub mod mandate {
     use super::*;
 
     pub fn create_mandate(
-        ctx: Context<CreateAndApproveMandate>,
+        ctx: Context<CreateMandate>,
         mandate_id: u64,
         args: CreateMandateArgs,
     ) -> Result<()> {
@@ -22,16 +22,12 @@ pub mod mandate {
         Ok(())
     }
 
-    pub fn approve_mandate(ctx: Context<CreateAndApproveMandate>) -> Result<()> {
+    pub fn approve_mandate(ctx: Context<ApproveMandate>, mandate_id: u64) -> Result<()> {
         ctx.accounts.approve()?;
         Ok(())
     }
-    pub fn execute_mandate(
-        ctx: Context<ExecuteMandate>,
-        mandate_id: u64,
-        args: ExecuteMandateArgs,
-    ) -> Result<()> {
-        ctx.accounts.execute_withdraw(mandate_id, args)?;
+    pub fn execute_mandate(ctx: Context<ExecuteMandate>, args: ExecuteMandateArgs) -> Result<()> {
+        ctx.accounts.execute(args)?;
         Ok(())
     }
 
