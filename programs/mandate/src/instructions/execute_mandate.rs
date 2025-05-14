@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token_interface::{
-    transfer_checked, Mint, TokenAccount, TokenInterface, TransferChecked,
+use anchor_spl::token::{
+    transfer_checked, Mint, Token, TokenAccount, TransferChecked,
 };
 
 use crate::state::state::{DebitType, Mandate};
@@ -20,30 +20,27 @@ pub struct ExecuteMandate<'info> {
     pub mandate: Account<'info, Mandate>,
 
     #[account(
-        mint::token_program = token_program,
         constraint = mint.key() == mandate.mint @ MandateError::InvalidMint,
     )]
-    pub mint: InterfaceAccount<'info, Mint>,
+    pub mint: Account<'info, Mint>,
 
     #[account(
         mut,
         associated_token::mint = mint,
         associated_token::authority = mandate.user,
         associated_token::token_program = token_program,
-        // constraint = user_token_account.key() == mandate.user_token_account @ MandateError::InvalidTokenAccount,
     )]
-    pub user_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub user_token_account: Account<'info, TokenAccount>,
 
     #[account(
         mut, 
         associated_token::mint = mint,
         associated_token::authority = mandate.authority,
         associated_token::token_program = token_program,
-        // constraint = destination_token_account.key() == mandate.destination_token_account @ MandateError::InvalidTokenAccount,
     )]
-    pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub destination_token_account: Account<'info, TokenAccount>,
 
-    pub token_program: Interface<'info, TokenInterface>,
+    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
 

@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token_interface::{approve, Approve, Mint, TokenAccount, TokenInterface},
+    token::{approve, Approve, Mint, Token, TokenAccount},
 };
 
 use crate::state::state::Mandate;
@@ -26,10 +26,7 @@ pub struct ApproveMandate<'info> {
     pub mandate: Account<'info, Mandate>,
 
     /// The token mint for the mandate
-    #[account(
-        mint::token_program = token_program
-    )]
-    pub mint: InterfaceAccount<'info, Mint>,
+    pub mint: Account<'info, Mint>,
 
     /// The user's token account that will be debited
     #[account(
@@ -40,10 +37,10 @@ pub struct ApproveMandate<'info> {
         associated_token::token_program = token_program,
         constraint = user_token_account.owner == user.key()
     )]
-    pub user_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub user_token_account: Account<'info, TokenAccount>,
 
     pub associated_token_program: Program<'info, AssociatedToken>,
-    pub token_program: Interface<'info, TokenInterface>,
+    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
 

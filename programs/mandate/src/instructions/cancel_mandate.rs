@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token_interface::{revoke, Mint, Revoke, TokenAccount, TokenInterface};
+use anchor_spl::token::{revoke, Mint, Revoke, Token, TokenAccount};
 
 use crate::state::state::Mandate;
 
@@ -19,10 +19,7 @@ pub struct CancelMandate<'info> {
     )]
     pub mandate: Account<'info, Mandate>,
 
-    #[account(
-        mint::token_program = token_program
-    )]
-    pub mint: InterfaceAccount<'info, Mint>,
+    pub mint: Account<'info, Mint>,
 
     #[account(
         mut,
@@ -31,9 +28,9 @@ pub struct CancelMandate<'info> {
         associated_token::token_program = token_program,
         constraint = user_token_account.owner == user.key()
     )]
-    pub user_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub user_token_account: Account<'info, TokenAccount>,
 
-    pub token_program: Interface<'info, TokenInterface>,
+    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
 

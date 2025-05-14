@@ -11,7 +11,8 @@ import {
     ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import { assert } from "chai";
-import { randomBytes } from "crypto";
+import userwallet from "./dev-wallet.json";
+import authoritywallet from "./turbin3-wallet.json";
 
 describe("mandate program tests", () => {
     // Configure the client to use the local cluster.
@@ -20,14 +21,23 @@ describe("mandate program tests", () => {
     const program = anchor.workspace.Mandate as Program<Mandate>;
     const connection = provider.connection;
     const systemProgram = SystemProgram.programId;
-    const tokenProgram = TOKEN_2022_PROGRAM_ID;
+    const tokenProgram = TOKEN_PROGRAM_ID;
     const associatedTokenProgram = ASSOCIATED_TOKEN_PROGRAM_ID;
+
+    const user = Keypair.fromSecretKey(new Uint8Array(userwallet));
+    const authority = Keypair.fromSecretKey(new Uint8Array(authoritywallet));
 
     const mandateAmount = new BN(500000);
 
     // Test-specific keypairs and variables
-    const user = Keypair.generate();
-    const authority = Keypair.generate();
+    // const user = new PublicKey("Cucujcj54KYPNHB7612BZyiBee4q3FZCsJwAynjyCAu9");
+    // const authority = new PublicKey(
+    //     "991GzBZPbBMEvr9eQvbcSVxsmbdaiYEKMhxvTbrb45K5"
+    // );
+
+    // const user = Keypair.generate();
+    // const authority = Keypair.generate();
+
     let mint: PublicKey;
     let userTokenAccount: PublicKey;
     let authorityTokenAccount: PublicKey;
@@ -38,30 +48,27 @@ describe("mandate program tests", () => {
     // Setup before tests
     before(async () => {
         // Airdrop SOL to user and authority
-        const sig1 = await provider.connection.requestAirdrop(
-            user.publicKey,
-            2e9
-        );
-        await provider.connection.confirmTransaction(sig1, "confirmed");
-        const sig2 = await provider.connection.requestAirdrop(
-            authority.publicKey,
-            2e9
-        );
-        await provider.connection.confirmTransaction(sig2, "confirmed");
+        // const sig1 = await provider.connection.requestAirdrop(
+        //     user.publicKey,
+        //     2e9
+        // );
+        // await provider.connection.confirmTransaction(sig1, "confirmed");
+        // const sig2 = await provider.connection.requestAirdrop(
+        //     authority.publicKey,
+        //     2e9
+        // );
+        // await provider.connection.confirmTransaction(sig2, "confirmed");
 
-        // Create a new mint with TOKEN_2022_PROGRAM_ID
-        mint = await createMint(
-            provider.connection,
-            user,
-            user.publicKey,
-            null,
-            6, // decimals
-            undefined,
-            undefined,
-            tokenProgram
-        );
+        // Create a new mint with TOKEN_PROGRAM_ID, reusing the same mint address
+        mint = new PublicKey("4EpEH7DUdAXcuMSVYGJX484NWvDLPS3sSJqFjMvUPtRg");
 
-        console.log("Created mint:", mint.toString());
+        // mint = await createMint(
+        //     provider.connection,
+        //     user,
+        //     user.publicKey,
+        //     null,
+        //     6
+        // );
 
         // Create ATA for user and authority with TOKEN_2022_PROGRAM_ID
         const userAta = await getOrCreateAssociatedTokenAccount(
@@ -108,11 +115,7 @@ describe("mandate program tests", () => {
 
         // Compute PDA for mandate
         [mandatePda, mandateBump] = PublicKey.findProgramAddressSync(
-            [
-                Buffer.from("mandate"),
-                // authority.publicKey.toBuffer(),
-                mandateId.toArrayLike(Buffer, "le", 8),
-            ],
+            [Buffer.from("mandate"), mandateId.toArrayLike(Buffer, "le", 8)],
             program.programId
         );
     });
@@ -140,6 +143,7 @@ describe("mandate program tests", () => {
             .rpc();
 
         const mandateAccount = await program.account.mandate.fetch(mandatePda);
+        console.log("Mandate account:", mandateAccount);
         assert.ok(mandateAccount.id.eq(mandateId));
         assert.equal(mandateAccount.isApproved, false);
         assert.equal(mandateAccount.isActive, false);
@@ -217,7 +221,7 @@ describe("mandate program tests", () => {
     it("Modifies a mandate", async () => {
         const previousState = (await program.account.mandate.fetch(mandatePda))
             .isActive;
-        console.log("   Previous state:", previousState);
+        console.log("Previous state:", previousState);
 
         const tx = await program.methods
             .modifyMandate()

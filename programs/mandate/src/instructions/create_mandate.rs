@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token_interface::{Mint, TokenAccount, TokenInterface},
+    token::{Mint, Token, TokenAccount},
 };
 
 use crate::state::state::{DebitType, Mandate};
@@ -9,7 +9,6 @@ use crate::state::state::{DebitType, Mandate};
 #[derive(Accounts)]
 #[instruction(mandate_id: u64)]
 pub struct CreateMandate<'info> {
-    // Move some of the larger accounts into Box to reduce stack usage
     #[account(mut)]
     pub user: Signer<'info>,
 
@@ -24,7 +23,7 @@ pub struct CreateMandate<'info> {
     )]
     pub mandate: Box<Account<'info, Mandate>>,
 
-    pub mint: Box<InterfaceAccount<'info, Mint>>,
+    pub mint: Box<Account<'info, Mint>>,
 
     #[account(
         mut,
@@ -32,19 +31,17 @@ pub struct CreateMandate<'info> {
         associated_token::authority = user,
         associated_token::token_program = token_program,
     )]
-    pub user_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub user_token_account: Box<Account<'info, TokenAccount>>,
 
     #[account(
-        init_if_needed,
-        payer = user,
+        mut,
         associated_token::mint = mint,
         associated_token::authority = authority,
         associated_token::token_program = token_program,
     )]
-    pub authority_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub authority_token_account: Box<Account<'info, TokenAccount>>,
 
-    // Keep these as regular references since they're smaller
-    pub token_program: Interface<'info, TokenInterface>,
+    pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
@@ -66,10 +63,7 @@ impl<'info> CreateMandate<'info> {
 
         // Validate inputs
         require!(args.amount > 0, MandateError::InvalidAmount);
-        require!(
-            self.user_token_account.owner == self.user.key(),
-            MandateError::InvalidTokenAccount
-        );
+
         require!(
             self.user_token_account.mint == self.mint.key(),
             MandateError::InvalidMint

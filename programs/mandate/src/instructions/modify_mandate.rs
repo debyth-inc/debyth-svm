@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token_interface::TokenInterface;
+use anchor_spl::token::Token;
 
 use crate::state::state::Mandate;
 
@@ -16,7 +16,7 @@ pub struct ModifyMandate<'info> {
     )]
     pub mandate: Account<'info, Mandate>,
 
-    pub token_program: Interface<'info, TokenInterface>,
+    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
 
