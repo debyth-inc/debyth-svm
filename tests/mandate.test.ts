@@ -6,7 +6,6 @@ import {
     createMint,
     getOrCreateAssociatedTokenAccount,
     mintTo,
-    TOKEN_2022_PROGRAM_ID,
     TOKEN_PROGRAM_ID,
     ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
@@ -24,8 +23,8 @@ describe("mandate program tests", () => {
     const tokenProgram = TOKEN_PROGRAM_ID;
     const associatedTokenProgram = ASSOCIATED_TOKEN_PROGRAM_ID;
 
-    const user = Keypair.fromSecretKey(new Uint8Array(userwallet));
-    const authority = Keypair.fromSecretKey(new Uint8Array(authoritywallet));
+    // const user = Keypair.fromSecretKey(new Uint8Array(userwallet));
+    // const authority = Keypair.fromSecretKey(new Uint8Array(authoritywallet));
 
     const mandateAmount = new BN(500000);
 
@@ -35,8 +34,8 @@ describe("mandate program tests", () => {
     //     "991GzBZPbBMEvr9eQvbcSVxsmbdaiYEKMhxvTbrb45K5"
     // );
 
-    // const user = Keypair.generate();
-    // const authority = Keypair.generate();
+    const user = Keypair.generate();
+    const authority = Keypair.generate();
 
     let mint: PublicKey;
     let userTokenAccount: PublicKey;
@@ -48,27 +47,27 @@ describe("mandate program tests", () => {
     // Setup before tests
     before(async () => {
         // Airdrop SOL to user and authority
-        // const sig1 = await provider.connection.requestAirdrop(
-        //     user.publicKey,
-        //     2e9
-        // );
-        // await provider.connection.confirmTransaction(sig1, "confirmed");
-        // const sig2 = await provider.connection.requestAirdrop(
-        //     authority.publicKey,
-        //     2e9
-        // );
-        // await provider.connection.confirmTransaction(sig2, "confirmed");
+        const sig1 = await provider.connection.requestAirdrop(
+            user.publicKey,
+            2e9
+        );
+        await provider.connection.confirmTransaction(sig1, "confirmed");
+        const sig2 = await provider.connection.requestAirdrop(
+            authority.publicKey,
+            2e9
+        );
+        await provider.connection.confirmTransaction(sig2, "confirmed");
 
         // Create a new mint with TOKEN_PROGRAM_ID, reusing the same mint address
-        mint = new PublicKey("4EpEH7DUdAXcuMSVYGJX484NWvDLPS3sSJqFjMvUPtRg");
+        // mint = new PublicKey("4EpEH7DUdAXcuMSVYGJX484NWvDLPS3sSJqFjMvUPtRg");
 
-        // mint = await createMint(
-        //     provider.connection,
-        //     user,
-        //     user.publicKey,
-        //     null,
-        //     6
-        // );
+        mint = await createMint(
+            provider.connection,
+            user,
+            user.publicKey,
+            null,
+            6
+        );
 
         // Create ATA for user and authority with TOKEN_2022_PROGRAM_ID
         const userAta = await getOrCreateAssociatedTokenAccount(
