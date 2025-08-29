@@ -10,13 +10,13 @@ use crate::state::state::{DebitType, Mandate};
 #[instruction(mandate_id: u64)]
 pub struct CreateMandate<'info> {
     #[account(mut)]
-    pub user: Signer<'info>,
-
-    pub authority: SystemAccount<'info>,
+    pub authority: Signer<'info>,
+    
+    pub user: SystemAccount<'info>,
 
     #[account(
         init,
-        payer = user,
+        payer = authority,
         space = 8 + Mandate::INIT_SPACE,
         seeds = [b"mandate", mandate_id.to_le_bytes().as_ref()],
         bump,
