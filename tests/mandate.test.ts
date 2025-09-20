@@ -10,8 +10,8 @@ import {
     ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import { assert } from "chai";
-import userwallet from "./dev-wallet.json";
-import authoritywallet from "./turbin3-wallet.json";
+// import userwallet from "./dev-wallet.json";
+// import authoritywallet from "./turbin3-wallet.json";
 
 describe("mandate program tests", () => {
     // Configure the client to use the local cluster.
@@ -23,10 +23,10 @@ describe("mandate program tests", () => {
     const tokenProgram = TOKEN_PROGRAM_ID;
     const associatedTokenProgram = ASSOCIATED_TOKEN_PROGRAM_ID;
 
-    const user = Keypair.fromSecretKey(new Uint8Array(userwallet));
-    const authority = Keypair.fromSecretKey(new Uint8Array(authoritywallet));
+    // const user = Keypair.fromSecretKey(new Uint8Array(userwallet));
+    // const authority = Keypair.fromSecretKey(new Uint8Array(authoritywallet));
 
-    const mandateAmount = new BN(500000);
+    // const mandateAmount = new BN(500000);
 
     // Test-specific keypairs and variables
     // const user = new PublicKey("Cucujcj54KYPNHB7612BZyiBee4q3FZCsJwAynjyCAu9");
@@ -37,226 +37,607 @@ describe("mandate program tests", () => {
     // const user = Keypair.generate();
     // const authority = Keypair.generate();
 
+    let user: Keypair;
+    let authority: Keypair;
     let mint: PublicKey;
     let userTokenAccount: PublicKey;
     let authorityTokenAccount: PublicKey;
-    const mandateId = new anchor.BN(1);
     let mandatePda: PublicKey;
     let mandateBump: number;
+    let mandateId: BN;
 
-    // Setup before tests
-    before(async () => {
+    const mandateAmount = new BN(500000);
+
+    beforeEach(async () => {
+        this.user = Keypair.generate();
+        this.authority = Keypair.generate();
+        this.mandateId = new anchor.BN(Date.now()); // Unique ID for each test
+
         // Airdrop SOL to user and authority
-        // const sig1 = await provider.connection.requestAirdrop(
-        //     user.publicKey,
-        //     2e9
-        // );
-        // await provider.connection.confirmTransaction(sig1, "confirmed");
-        // const sig2 = await provider.connection.requestAirdrop(
-        //     authority.publicKey,
-        //     2e9
-        // );
-        // await provider.connection.confirmTransaction(sig2, "confirmed");
+        await this.provider.connection.requestAirdrop(this.user.publicKey, 2e9);
+        await this.provider.connection.requestAirdrop(this.authority.publicKey, 2e9);
 
-        // Create a new mint with TOKEN_PROGRAM_ID, reusing the same mint address
-        mint = new PublicKey("4EpEH7DUdAXcuMSVYGJX484NWvDLPS3sSJqFjMvUPtRg");
+        // Create a new mint
+        this.mint = await createMint(
+            this.provider.connection,
+            this.user,
+            this.user.publicKey,
+            null,
+            6
+        );
 
-        // mint = await createMint(
-        //     provider.connection,
-        //     user,
-        //     user.publicKey,
-        //     null,
-        //     6
-        // );
-
-        // Create ATA for user and authority with TOKEN_2022_PROGRAM_ID
+        // Create ATA for user and authority
         const userAta = await getOrCreateAssociatedTokenAccount(
-            provider.connection,
-            user,
-            mint,
-            user.publicKey,
+            this.provider.connection,
+            this.user,
+            this.mint,
+            this.user.publicKey,
             false,
             undefined,
             undefined,
-            tokenProgram
+            this.tokenProgram
         );
-        userTokenAccount = userAta.address;
-        console.log("User token account:", userTokenAccount.toString());
+        this.userTokenAccount = userAta.address;
 
         const authAta = await getOrCreateAssociatedTokenAccount(
-            provider.connection,
-            authority,
-            mint,
-            authority.publicKey,
+            this.provider.connection,
+            this.authority,
+            this.mint,
+            this.authority.publicKey,
             false,
             undefined,
             undefined,
-            tokenProgram
+            this.tokenProgram
         );
-        authorityTokenAccount = authAta.address;
-        console.log(
-            "Authority token account:",
-            authorityTokenAccount.toString()
-        );
+        this.authorityTokenAccount = authAta.address;
 
         // Mint tokens to user
-        // await mintTo(
-        //     provider.connection,
-        //     user,
-        //     mint,
-        //     userTokenAccount,
-        //     user,
-        //     1_000_000,
-        //     undefined,
-        //     undefined,
-        //     tokenProgram
-        // );
+        await mintTo(
+            this.provider.connection,
+            this.user,
+            this.mint,
+            this.userTokenAccount,
+            this.user,
+            1_000_000,
+            undefined,
+            undefined,
+            this.tokenProgram
+        );
 
         // Compute PDA for mandate
-        [mandatePda, mandateBump] = PublicKey.findProgramAddressSync(
-            [Buffer.from("mandate"), mandateId.toArrayLike(Buffer, "le", 8)],
-            program.programId
+        [this.mandatePda, this.mandateBump] = PublicKey.findProgramAddressSync(
+            [Buffer.from("mandate"), this.mandateId.toArrayLike(Buffer, "le", 8)],
+            this.program.programId
         );
     });
 
-    it("Creates a mandate", async () => {
+    it("Creates a mandate successfully", async () => {
         const args = {
-            amount: mandateAmount,
+            amountPerDebit: mandateAmount,
+            limit: mandateAmount.mul(new BN(10)), // Example limit
+            isUnlimitedSpend: false,
             debitType: { fixed: {} },
         };
 
-        await program.methods
-            .createMandate(mandateId, args)
-            .accountsPartial({
-                user: user.publicKey,
-                authority: authority.publicKey,
-                mandate: mandatePda,
-                mint,
-                userTokenAccount,
-                authorityTokenAccount,
-                associatedTokenProgram,
-                tokenProgram,
-                systemProgram,
+        await this.program.methods
+            .createMandate(this.mandateId, args)
+            .accounts({
+                user: this.user.publicKey,
+                authority: this.authority.publicKey,
+                mandate: this.mandatePda,
+                mint: this.mint,
+                userTokenAccount: this.userTokenAccount,
+                authorityTokenAccount: this.authorityTokenAccount,
+                associatedTokenProgram: this.associatedTokenProgram,
+                tokenProgram: this.tokenProgram,
+                systemProgram: this.systemProgram,
             })
-            .signers([authority])
+            .signers([this.authority])
             .rpc();
 
-        const mandateAccount = await program.account.mandate.fetch(mandatePda);
-        console.log("Mandate account:", mandateAccount);
-        assert.ok(mandateAccount.id.eq(mandateId));
+        const mandateAccount = await this.program.account.mandate.fetch(this.mandatePda);
+        assert.ok(mandateAccount.id.eq(this.mandateId));
         assert.equal(mandateAccount.isApproved, false);
         assert.equal(mandateAccount.isActive, false);
-        assert.ok(mandateAccount.amount.eq(mandateAmount));
+        assert.ok(mandateAccount.amountPerDebit.eq(mandateAmount));
+        assert.ok(mandateAccount.authority.equals(this.authority.publicKey));
+        assert.ok(mandateAccount.user.equals(this.user.publicKey));
+        assert.ok(mandateAccount.mint.equals(this.mint));
     });
 
-    it("Approves a mandate", async () => {
-        const [expectedMandatePda, _] = PublicKey.findProgramAddressSync(
-            [Buffer.from("mandate"), mandateId.toArrayLike(Buffer, "le", 8)],
-            program.programId
-        );
-        assert.ok(
-            mandatePda.equals(expectedMandatePda),
-            "Mandate PDAs do not match"
-        );
-
-        const tx = await program.methods
-            .approveMandate(mandateId)
-            .accountsPartial({
-                user: user.publicKey,
-                authority: authority.publicKey,
-                mandate: mandatePda,
-                mint,
-                userTokenAccount,
-                associatedTokenProgram,
-                tokenProgram,
-                systemProgram,
-            })
-            .signers([user])
-            .rpc();
-
-        console.log("Approve transaction signature:", tx); // Log the transaction signature
-
-        // Wait for the transaction to be confirmed
-        await provider.connection.confirmTransaction(tx, "confirmed");
-
-        const mandateAccount = await program.account.mandate.fetch(mandatePda);
-        assert.equal(mandateAccount.isApproved, true);
-    });
-
-    it("Executes a mandate debit", async () => {
+    it("Fails to create a mandate if not signed by authority", async () => {
         const args = {
-            amount: mandateAmount,
+            amountPerDebit: mandateAmount,
+            limit: mandateAmount.mul(new BN(10)),
+            isUnlimitedSpend: false,
+            debitType: { fixed: {} },
         };
 
-        const tx = await program.methods
-            .executeMandate(args)
-            .accountsPartial({
-                authority: authority.publicKey,
-                mandate: mandatePda,
-                mint,
-                userTokenAccount,
-                tokenProgram,
-                systemProgram,
+        try {
+            await this.program.methods
+                .createMandate(this.mandateId, args)
+                .accounts({
+                    user: this.user.publicKey,
+                    authority: this.authority.publicKey,
+                    mandate: this.mandatePda,
+                    mint: this.mint,
+                    userTokenAccount: this.userTokenAccount,
+                    authorityTokenAccount: this.authorityTokenAccount,
+                    associatedTokenProgram: this.associatedTokenProgram,
+                    tokenProgram: this.tokenProgram,
+                    systemProgram: this.systemProgram,
+                })
+                .signers([this.user]) // Incorrect signer
+                .rpc();
+            assert.fail("Should have failed to create mandate");
+        } catch (err: any) {
+            assert.include(err.message, "Signature verification failed");
+        }
+    });
+
+    it("Approves a mandate successfully", async () => {
+        // Create the mandate first
+        const createArgs = {
+            amountPerDebit: mandateAmount,
+            limit: mandateAmount.mul(new BN(10)),
+            isUnlimitedSpend: false,
+            debitType: { fixed: {} },
+        };
+        await this.program.methods
+            .createMandate(this.mandateId, createArgs)
+            .accounts({
+                user: this.user.publicKey,
+                authority: this.authority.publicKey,
+                mandate: this.mandatePda,
+                mint: this.mint,
+                userTokenAccount: this.userTokenAccount,
+                authorityTokenAccount: this.authorityTokenAccount,
+                associatedTokenProgram: this.associatedTokenProgram,
+                tokenProgram: this.tokenProgram,
+                systemProgram: this.systemProgram,
             })
-            .signers([authority])
+            .signers([this.authority])
             .rpc();
 
-        console.log("Execute transaction signature:", tx);
-        // Wait for the transaction to be confirmed
-        await provider.connection.confirmTransaction(tx, "confirmed");
-        // Check the user's token account balance
-        const userTokenAccountInfo = await connection.getTokenAccountBalance(
-            userTokenAccount
+        await this.program.methods
+            .approveMandate()
+            .accounts({
+                user: this.user.publicKey,
+                authority: this.authority.publicKey,
+                mandate: this.mandatePda,
+                mint: this.mint,
+                userTokenAccount: this.userTokenAccount,
+                associatedTokenProgram: this.associatedTokenProgram,
+                tokenProgram: this.tokenProgram,
+                systemProgram: this.systemProgram,
+            })
+            .signers([this.user])
+            .rpc();
+
+        const mandateAccount = await this.program.account.mandate.fetch(this.mandatePda);
+        assert.equal(mandateAccount.isApproved, true);
+        assert.equal(mandateAccount.isActive, false);
+    });
+
+    it("Fails to approve a mandate if not signed by user", async () => {
+        // Create the mandate first
+        const createArgs = {
+            amountPerDebit: mandateAmount,
+            limit: mandateAmount.mul(new BN(10)),
+            isUnlimitedSpend: false,
+            debitType: { fixed: {} },
+        };
+        await this.program.methods
+            .createMandate(this.mandateId, createArgs)
+            .accounts({
+                user: this.user.publicKey,
+                authority: this.authority.publicKey,
+                mandate: this.mandatePda,
+                mint: this.mint,
+                userTokenAccount: this.userTokenAccount,
+                authorityTokenAccount: this.authorityTokenAccount,
+                associatedTokenProgram: this.associatedTokenProgram,
+                tokenProgram: this.tokenProgram,
+                systemProgram: this.systemProgram,
+            })
+            .signers([this.authority])
+            .rpc();
+
+        try {
+            await this.program.methods
+                .approveMandate()
+                .accounts({
+                    user: this.user.publicKey,
+                    authority: this.authority.publicKey,
+                    mandate: this.mandatePda,
+                    mint: this.mint,
+                    userTokenAccount: this.userTokenAccount,
+                    associatedTokenProgram: this.associatedTokenProgram,
+                    tokenProgram: this.tokenProgram,
+                    systemProgram: this.systemProgram,
+                })
+                .signers([this.authority]) // Incorrect signer
+                .rpc();
+            assert.fail("Should have failed to approve mandate");
+        } catch (err: any) {
+            assert.include(err.message, "Signature verification failed");
+        }
+    });
+
+    it("Executes a mandate debit successfully", async () => {
+        // Create and approve the mandate first
+        const createArgs = {
+            amountPerDebit: mandateAmount,
+            limit: mandateAmount.mul(new BN(10)),
+            isUnlimitedSpend: false,
+            debitType: { fixed: {} },
+        };
+        await this.program.methods
+            .createMandate(this.mandateId, createArgs)
+            .accounts({
+                user: this.user.publicKey,
+                authority: this.authority.publicKey,
+                mandate: this.mandatePda,
+                mint: this.mint,
+                userTokenAccount: this.userTokenAccount,
+                authorityTokenAccount: this.authorityTokenAccount,
+                associatedTokenProgram: this.associatedTokenProgram,
+                tokenProgram: this.tokenProgram,
+                systemProgram: this.systemProgram,
+            })
+            .signers([this.authority])
+            .rpc();
+
+        await this.program.methods
+            .approveMandate()
+            .accounts({
+                user: this.user.publicKey,
+                authority: this.authority.publicKey,
+                mandate: this.mandatePda,
+                mint: this.mint,
+                userTokenAccount: this.userTokenAccount,
+                associatedTokenProgram: this.associatedTokenProgram,
+                tokenProgram: this.tokenProgram,
+                systemProgram: this.systemProgram,
+            })
+            .signers([this.user])
+            .rpc();
+
+        const initialUserTokenAccountInfo = await this.connection.getTokenAccountBalance(
+            this.userTokenAccount
         );
-        console.log(
-            "User token account balance after debit:",
-            userTokenAccountInfo.value.uiAmountString
+        const initialUserBalance = new BN(initialUserTokenAccountInfo.value.amount);
+
+        const args = {
+            amountToDebit: mandateAmount,
+        };
+
+        await this.program.methods
+            .executeMandate(args)
+            .accounts({
+                authority: this.authority.publicKey,
+                mandate: this.mandatePda,
+                mint: this.mint,
+                userTokenAccount: this.userTokenAccount,
+                destinationTokenAccount: this.authorityTokenAccount,
+                tokenProgram: this.tokenProgram,
+                systemProgram: this.systemProgram,
+            })
+            .signers([this.authority])
+            .rpc();
+
+        const userTokenAccountInfo = await this.connection.getTokenAccountBalance(
+            this.userTokenAccount
         );
-        const mandateAccount = await program.account.mandate.fetch(mandatePda);
+        const currentUserBalance = new BN(userTokenAccountInfo.value.amount);
+        assert.ok(
+            currentUserBalance.eq(initialUserBalance.sub(mandateAmount)),
+            "User token account balance should decrease by mandate amount"
+        );
+
+        const mandateAccount = await this.program.account.mandate.fetch(this.mandatePda);
         assert.equal(mandateAccount.isActive, true);
         assert.equal(mandateAccount.isApproved, true);
     });
 
-    it("Modifies a mandate", async () => {
-        const previousState = (await program.account.mandate.fetch(mandatePda))
-            .isActive;
-        console.log("Previous state:", previousState);
-
-        const tx = await program.methods
-            .modifyMandate()
-            .accountsPartial({
-                authority: authority.publicKey,
-                mandate: mandatePda,
-                tokenProgram,
-                systemProgram,
+    it("Fails to execute a mandate debit if not signed by authority", async () => {
+        const createArgs = {
+            amountPerDebit: mandateAmount,
+            limit: mandateAmount.mul(new BN(10)),
+            isUnlimitedSpend: false,
+            debitType: { fixed: {} },
+        };
+        await this.program.methods
+            .createMandate(this.mandateId, createArgs)
+            .accounts({
+                user: this.user.publicKey,
+                authority: this.authority.publicKey,
+                mandate: this.mandatePda,
+                mint: this.mint,
+                userTokenAccount: this.userTokenAccount,
+                authorityTokenAccount: this.authorityTokenAccount,
+                associatedTokenProgram: this.associatedTokenProgram,
+                tokenProgram: this.tokenProgram,
+                systemProgram: this.systemProgram,
             })
-            .signers([authority])
+            .signers([this.authority])
             .rpc();
-        console.log("Modify transaction signature:", tx);
 
-        const newState = await program.account.mandate.fetch(mandatePda);
-        assert.notEqual(previousState, newState.isActive);
-        console.log("New state:", newState.isActive);
+        await this.program.methods
+            .approveMandate()
+            .accounts({
+                user: this.user.publicKey,
+                authority: this.authority.publicKey,
+                mandate: this.mandatePda,
+                mint: this.mint,
+                userTokenAccount: this.userTokenAccount,
+                associatedTokenProgram: this.associatedTokenProgram,
+                tokenProgram: this.tokenProgram,
+                systemProgram: this.systemProgram,
+            })
+            .signers([this.user])
+            .rpc();
+
+        const args = {
+            amountToDebit: mandateAmount,
+        };
+
+        try {
+            await this.program.methods
+                .executeMandate(args)
+                .accounts({
+                    authority: this.authority.publicKey,
+                    mandate: this.mandatePda,
+                    mint: this.mint,
+                    userTokenAccount: this.userTokenAccount,
+                    destinationTokenAccount: this.authorityTokenAccount,
+                    tokenProgram: this.tokenProgram,
+                    systemProgram: this.systemProgram,
+                })
+                .signers([this.user]) // Incorrect signer
+                .rpc();
+            assert.fail("Should have failed to execute mandate");
+        } catch (err: any) {
+            assert.include(err.message, "Signature verification failed");
+        }
     });
 
-    it("Cancels a mandate", async () => {
-        await program.methods
-            .cancelMandate()
-            .accountsPartial({
-                user: user.publicKey,
-                authority: authority.publicKey,
-                mandate: mandatePda,
-                mint,
-                userTokenAccount,
-                tokenProgram,
-                systemProgram,
+    it("Modifies a mandate successfully", async () => {
+        const createArgs = {
+            amountPerDebit: mandateAmount,
+            limit: mandateAmount.mul(new BN(10)),
+            isUnlimitedSpend: false,
+            debitType: { fixed: {} },
+        };
+        await this.program.methods
+            .createMandate(this.mandateId, createArgs)
+            .accounts({
+                user: this.user.publicKey,
+                authority: this.authority.publicKey,
+                mandate: this.mandatePda,
+                mint: this.mint,
+                userTokenAccount: this.userTokenAccount,
+                authorityTokenAccount: this.authorityTokenAccount,
+                associatedTokenProgram: this.associatedTokenProgram,
+                tokenProgram: this.tokenProgram,
+                systemProgram: this.systemProgram,
             })
-            .signers([user])
+            .signers([this.authority])
+            .rpc();
+
+        await this.program.methods
+            .approveMandate()
+            .accounts({
+                user: this.user.publicKey,
+                authority: this.authority.publicKey,
+                mandate: this.mandatePda,
+                mint: this.mint,
+                userTokenAccount: this.userTokenAccount,
+                associatedTokenProgram: this.associatedTokenProgram,
+                tokenProgram: this.tokenProgram,
+                systemProgram: this.systemProgram,
+            })
+            .signers([this.user])
+            .rpc();
+
+        const previousMandateAccount = await this.program.account.mandate.fetch(
+            this.mandatePda
+        );
+        const previousState = previousMandateAccount.isActive;
+
+        await this.program.methods
+            .modifyMandate({
+                newAmountPerDebit: mandateAmount.add(new BN(100)),
+                newLimit: mandateAmount.mul(new BN(20)),
+                newIsUnlimitedSpend: false,
+                newDebitType: { variable: {} },
+            })
+            .accounts({
+                authority: this.authority.publicKey,
+                mandate: this.mandatePda,
+                tokenProgram: this.tokenProgram,
+                systemProgram: this.systemProgram,
+            })
+            .signers([this.authority])
+            .rpc();
+
+        const newMandateAccount = await this.program.account.mandate.fetch(this.mandatePda);
+        assert.notEqual(previousState, newMandateAccount.isActive);
+    });
+
+    it("Fails to modify a mandate if not signed by authority", async () => {
+        const createArgs = {
+            amountPerDebit: mandateAmount,
+            limit: mandateAmount.mul(new BN(10)),
+            isUnlimitedSpend: false,
+            debitType: { fixed: {} },
+        };
+        await this.program.methods
+            .createMandate(this.mandateId, createArgs)
+            .accounts({
+                user: this.user.publicKey,
+                authority: this.authority.publicKey,
+                mandate: this.mandatePda,
+                mint: this.mint,
+                userTokenAccount: this.userTokenAccount,
+                authorityTokenAccount: this.authorityTokenAccount,
+                associatedTokenProgram: this.associatedTokenProgram,
+                tokenProgram: this.tokenProgram,
+                systemProgram: this.systemProgram,
+            })
+            .signers([this.authority])
+            .rpc();
+
+        await this.program.methods
+            .approveMandate()
+            .accounts({
+                user: this.user.publicKey,
+                authority: this.authority.publicKey,
+                mandate: this.mandatePda,
+                mint: this.mint,
+                userTokenAccount: this.userTokenAccount,
+                associatedTokenProgram: this.associatedTokenProgram,
+                tokenProgram: this.tokenProgram,
+                systemProgram: this.systemProgram,
+            })
+            .signers([this.user])
             .rpc();
 
         try {
-            await program.account.mandate.fetch(mandatePda);
+            await this.program.methods
+                .modifyMandate({
+                    newAmountPerDebit: mandateAmount.add(new BN(100)),
+                    newLimit: mandateAmount.mul(new BN(20)),
+                    newIsUnlimitedSpend: false,
+                    newDebitType: { variable: {} },
+                })
+                .accounts({
+                    authority: this.authority.publicKey,
+                    mandate: this.mandatePda,
+                    tokenProgram: this.tokenProgram,
+                    systemProgram: this.systemProgram,
+                })
+                .signers([this.user]) // Incorrect signer
+                .rpc();
+            assert.fail("Should have failed to modify mandate");
+        } catch (err: any) {
+            assert.include(err.message, "Signature verification failed");
+        }
+    });
+
+    it("Cancels a mandate successfully", async () => {
+        const createArgs = {
+            amountPerDebit: mandateAmount,
+            limit: mandateAmount.mul(new BN(10)),
+            isUnlimitedSpend: false,
+            debitType: { fixed: {} },
+        };
+        await this.program.methods
+            .createMandate(this.mandateId, createArgs)
+            .accounts({
+                user: this.user.publicKey,
+                authority: this.authority.publicKey,
+                mandate: this.mandatePda,
+                mint: this.mint,
+                userTokenAccount: this.userTokenAccount,
+                authorityTokenAccount: this.authorityTokenAccount,
+                associatedTokenProgram: this.associatedTokenProgram,
+                tokenProgram: this.tokenProgram,
+                systemProgram: this.systemProgram,
+            })
+            .signers([this.authority])
+            .rpc();
+
+        await this.program.methods
+            .approveMandate()
+            .accounts({
+                user: this.user.publicKey,
+                authority: this.authority.publicKey,
+                mandate: this.mandatePda,
+                mint: this.mint,
+                userTokenAccount: this.userTokenAccount,
+                associatedTokenProgram: this.associatedTokenProgram,
+                tokenProgram: this.tokenProgram,
+                systemProgram: this.systemProgram,
+            })
+            .signers([this.user])
+            .rpc();
+
+        await this.program.methods
+            .cancelMandate()
+            .accounts({
+                user: this.user.publicKey,
+                authority: this.authority.publicKey,
+                mandate: this.mandatePda,
+                mint: this.mint,
+                userTokenAccount: this.userTokenAccount,
+                tokenProgram: this.tokenProgram,
+                systemProgram: this.systemProgram,
+            })
+            .signers([this.user])
+            .rpc();
+
+        try {
+            await this.program.account.mandate.fetch(this.mandatePda);
             assert.fail("Mandate account should be closed");
+        } catch (err: any) {
+            assert.include(err.message, "Account does not exist");
+        }
+    });
+
+    it("Fails to cancel a mandate if not signed by user", async () => {
+        const createArgs = {
+            amountPerDebit: mandateAmount,
+            limit: mandateAmount.mul(new BN(10)),
+            isUnlimitedSpend: false,
+            debitType: { fixed: {} },
+        };
+        await this.program.methods
+            .createMandate(this.mandateId, createArgs)
+            .accounts({
+                user: this.user.publicKey,
+                authority: this.authority.publicKey,
+                mandate: this.mandatePda,
+                mint: this.mint,
+                userTokenAccount: this.userTokenAccount,
+                authorityTokenAccount: this.authorityTokenAccount,
+                associatedTokenProgram: this.associatedTokenProgram,
+                tokenProgram: this.tokenProgram,
+                systemProgram: this.systemProgram,
+            })
+            .signers([this.authority])
+            .rpc();
+
+        await this.program.methods
+            .approveMandate()
+            .accounts({
+                user: this.user.publicKey,
+                authority: this.authority.publicKey,
+                mandate: this.mandatePda,
+                mint: this.mint,
+                userTokenAccount: this.userTokenAccount,
+                associatedTokenProgram: this.associatedTokenProgram,
+                tokenProgram: this.tokenProgram,
+                systemProgram: this.systemProgram,
+            })
+            .signers([this.user])
+            .rpc();
+
+        try {
+            await this.program.methods
+                .cancelMandate()
+                .accounts({
+                    user: this.user.publicKey,
+                    authority: this.authority.publicKey,
+                    mandate: this.mandatePda,
+                    mint: this.mint,
+                    userTokenAccount: this.userTokenAccount,
+                    tokenProgram: this.tokenProgram,
+                    systemProgram: this.systemProgram,
+                })
+                .signers([this.authority]) // Incorrect signer
+                .rpc();
+            assert.fail("Should have failed to cancel mandate");
         } catch (err: any) {
             assert.include(err.message, "Account does not exist");
         }

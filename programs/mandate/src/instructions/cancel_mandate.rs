@@ -1,7 +1,8 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{revoke, Mint, Revoke, Token, TokenAccount};
 
-use crate::state::state::Mandate;
+use crate::state::Mandate;
+use crate::events::MandateCancelledEvent;
 
 #[derive(Accounts)]
 pub struct CancelMandate<'info> {
@@ -58,22 +59,18 @@ impl<'info> CancelMandate<'info> {
         // Update mandate state
         self.mandate.is_active = false;
         self.mandate.is_approved = false;
-        self.mandate.last_execution = Clock::get()?.unix_timestamp;
+        self.mandate.updated_at = Clock::get()?.unix_timestamp;
 
         // Emit cancellation event
-        emit!(MandateCancelled {
+        emit!(MandateCancelledEvent {
             mandate_id: self.mandate.id,
-            cancelled_at: Clock::get()?.unix_timestamp,
+            user: self.user.key(),
+            authority: self.authority.key(),
+
         });
 
         Ok(())
     }
-}
-
-#[event]
-pub struct MandateCancelled {
-    pub mandate_id: u64,
-    pub cancelled_at: i64,
 }
 
 #[error_code]

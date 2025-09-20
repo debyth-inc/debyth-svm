@@ -3,7 +3,8 @@ use anchor_spl::token::{
     transfer_checked, Mint, Token, TokenAccount, TransferChecked,
 };
 
-use crate::state::state::{DebitType, Mandate};
+use crate::state::{DebitType, Mandate};
+use crate::events::MandateExecutedEvent;
 
 #[derive(Accounts)]
 pub struct ExecuteMandate<'info> {
@@ -46,7 +47,7 @@ pub struct ExecuteMandate<'info> {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct ExecuteMandateArgs {
-    pub amount: u64,
+    pub amount_to_debit: u64,
 }
 
 impl<'info> ExecuteMandate<'info> {
@@ -61,17 +62,22 @@ impl<'info> ExecuteMandate<'info> {
         match self.mandate.debit_type {
             DebitType::Fixed => {
                 require!(
-                    self.mandate.amount == args.amount,
+                    self.mandate.amount_per_debit == args.amount_to_debit,
                     MandateError::InvalidAmountForFixedDebit
                 );
             },
             DebitType::Variable => {
                 require!(
-                    args.amount <= self.mandate.amount,
+                    args.amount_to_debit <= self.mandate.amount_per_debit,
                     MandateError::InvalidAmountForVariableDebit
                 );
             }
         }
+        // Check if debit exceeds total limit
+        require!(
+            self.mandate.total_debited_amount + args.amount_to_debit <= self.mandate.limit,
+            MandateError::DebitLimitExceeded
+        );
 
         // Token account validation
         require!(
@@ -103,12 +109,21 @@ impl<'info> ExecuteMandate<'info> {
                 },
                 signer,
             ),
-            args.amount,
+            args.amount_to_debit,
             self.mint.decimals,
         )?;
 
-        // Update last execution
-        self.mandate.last_execution = now;
+        // Update last execution and total debited amount
+        self.mandate.updated_at = now;
+        self.mandate.total_debited_amount = self.mandate.total_debited_amount.checked_add(args.amount_to_debit).ok_or(ProgramError::ArithmeticOverflow)?;
+
+        emit!(MandateExecutedEvent {
+            mandate_id: self.mandate.id,
+            authority: self.authority.key(),
+            user: self.mandate.user,
+            amount_per_debit: self.mandate.amount_per_debit,
+            total_debited_amount: self.mandate.total_debited_amount,
+        });
 
         Ok(())
     }
@@ -131,4 +146,6 @@ pub enum MandateError {
     InvalidAmountForFixedDebit,
     #[msg("Invalid amount for variable debit")]
     InvalidAmountForVariableDebit,
+    #[msg("Debit limit exceeded")]
+    DebitLimitExceeded,
 }

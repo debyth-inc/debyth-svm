@@ -78,14 +78,17 @@ impl<'info> ApproveMandate<'info> {
 
         // Since we don't have frequency, start_date, and end_date in the Mandate struct,
         // we'll just use the base amount
-        let amount = self.mandate.amount;
-
+        let amount = if self.mandate.is_unlimited_spend {
+            u64::MAX
+        } else {
+            self.mandate.limit
+        };
         approve(CpiContext::new(cpi_program, cpi_accounts), amount)?;
 
         // Update mandate state
         self.mandate.is_approved = true;
         self.mandate.is_active = true;
-        self.mandate.last_execution = now;
+        self.mandate.updated_at = now;
 
         Ok(())
     }

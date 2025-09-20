@@ -8,6 +8,9 @@ mod instructions;
 mod state;
 
 use instructions::*;
+use instructions::ModifyMandateArgs;
+
+pub mod events;
 
 #[program]
 pub mod mandate {
@@ -22,7 +25,7 @@ pub mod mandate {
         Ok(())
     }
 
-    pub fn approve_mandate(ctx: Context<ApproveMandate>, mandate_id: u64) -> Result<()> {
+    pub fn approve_mandate(ctx: Context<ApproveMandate>) -> Result<()> {
         ctx.accounts.approve()?;
         Ok(())
     }
@@ -31,8 +34,8 @@ pub mod mandate {
         Ok(())
     }
 
-    pub fn modify_mandate(ctx: Context<ModifyMandate>) -> Result<()> {
-        ctx.accounts.modify()?;
+    pub fn modify_mandate(ctx: Context<ModifyMandate>, args: ModifyMandateArgs) -> Result<()> {
+        ctx.accounts.modify(args)?;
         Ok(())
     }
 
