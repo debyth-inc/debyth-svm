@@ -4,15 +4,17 @@ use anchor_spl::{
     token::{Mint, Token, TokenAccount},
 };
 
-use crate::state::{DebitType, Mandate};
 use crate::events::MandateCreatedEvent;
+use crate::state::{DebitType, Mandate};
+
+use crate::errors::MandateError;
 
 #[derive(Accounts)]
 #[instruction(mandate_id: u64)]
 pub struct CreateMandate<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
-    
+
     pub user: SystemAccount<'info>,
 
     #[account(
@@ -34,14 +36,6 @@ pub struct CreateMandate<'info> {
     )]
     pub user_token_account: Box<Account<'info, TokenAccount>>,
 
-    #[account(
-        mut,
-        associated_token::mint = mint,
-        associated_token::authority = authority,
-        associated_token::token_program = token_program,
-    )]
-    pub authority_token_account: Box<Account<'info, TokenAccount>>,
-
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
@@ -53,6 +47,7 @@ pub struct CreateMandateArgs {
     pub limit: u64,
     pub is_unlimited_spend: bool,
     pub debit_type: DebitType,
+    pub debit_frequency_seconds: u64,
 }
 
 impl<'info> CreateMandate<'info> {
@@ -62,13 +57,15 @@ impl<'info> CreateMandate<'info> {
         args: CreateMandateArgs,
         bumps: &CreateMandateBumps,
     ) -> Result<()> {
-        
         // Validate inputs
         require!(args.amount_per_debit > 0, MandateError::InvalidAmount);
         if !args.is_unlimited_spend {
-            require!(args.limit >= args.amount_per_debit, MandateError::InvalidSpendCap);
+            require!(
+                args.limit >= args.amount_per_debit,
+                MandateError::InvalidSpendCap
+            );
         }
-        
+
         require!(
             self.user_token_account.mint == self.mint.key(),
             MandateError::InvalidMint
@@ -77,7 +74,6 @@ impl<'info> CreateMandate<'info> {
             self.user_token_account.delegate.is_none(),
             MandateError::TokenAlreadyDelegated
         );
-        
 
         let actual_limit = if args.is_unlimited_spend {
             u64::MAX
@@ -100,6 +96,7 @@ impl<'info> CreateMandate<'info> {
             is_approved: false,
             is_active: false,
             last_debit_date: 0,
+            debit_frequency_seconds: args.debit_frequency_seconds,
             created_at: Clock::get()?.unix_timestamp,
             updated_at: Clock::get()?.unix_timestamp,
         });
@@ -115,26 +112,10 @@ impl<'info> CreateMandate<'info> {
             limit: actual_limit,
             is_unlimited_spend: args.is_unlimited_spend,
             debit_type: args.debit_type,
+            debit_frequency_seconds: args.debit_frequency_seconds,
+            timestamp: Clock::get()?.unix_timestamp,
         });
 
         Ok(())
     }
-}
-
-#[error_code]
-pub enum MandateError {
-    #[msg("Mandate is already approved or active")]
-    AlreadyApproved,
-    #[msg("Mandate has expired")]
-    Expired,
-    #[msg("Invalid amount")]
-    InvalidAmount,
-    #[msg("Invalid spend cap")]
-    InvalidSpendCap,
-    #[msg("Invalid token account")]
-    InvalidTokenAccount,
-    #[msg("Invalid mint")]
-    InvalidMint,
-    #[msg("Token account is already delegated")]
-    TokenAlreadyDelegated,
 }

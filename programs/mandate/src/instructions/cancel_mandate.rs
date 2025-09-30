@@ -1,8 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{revoke, Mint, Revoke, Token, TokenAccount};
 
-use crate::state::Mandate;
 use crate::events::MandateCancelledEvent;
+use crate::state::Mandate;
+use crate::errors::MandateError;
 
 #[derive(Accounts)]
 pub struct CancelMandate<'info> {
@@ -16,7 +17,7 @@ pub struct CancelMandate<'info> {
         close = user,
         seeds = [b"mandate", mandate.id.to_le_bytes().as_ref()],
         bump = mandate.bump,
-        constraint = mandate.user == user.key() @ ManageError::UnauthorizedOwner,
+        constraint = mandate.user == user.key() || mandate.authority == user.key() @ MandateError::UnauthorizedOwner,
     )]
     pub mandate: Account<'info, Mandate>,
 
@@ -38,14 +39,13 @@ pub struct CancelMandate<'info> {
 impl<'info> CancelMandate<'info> {
     pub fn cancel(&mut self) -> Result<()> {
         // Verify mandate owner (redundant with account constraint, but kept for safety)
-        require_keys_eq!(
-            self.user.key(),
-            self.mandate.user,
-            ManageError::UnauthorizedOwner
+        require!(
+            self.user.key() == self.mandate.user || self.user.key() == self.mandate.authority,
+            MandateError::UnauthorizedOwner
         );
 
         // Verify mandate status
-        require!(self.mandate.is_approved, ManageError::MandateNotApproved);
+        require!(self.mandate.is_approved, MandateError::MandateNotApproved);
 
         // Revoke token approval
         let cpi_program = self.token_program.to_account_info();
@@ -56,27 +56,21 @@ impl<'info> CancelMandate<'info> {
         let cpi_context = CpiContext::new(cpi_program, cpi_accounts);
         revoke(cpi_context)?;
 
+        let now = Clock::get()?.unix_timestamp;
+
         // Update mandate state
         self.mandate.is_active = false;
         self.mandate.is_approved = false;
-        self.mandate.updated_at = Clock::get()?.unix_timestamp;
+        self.mandate.updated_at = now;
 
         // Emit cancellation event
         emit!(MandateCancelledEvent {
             mandate_id: self.mandate.id,
             user: self.user.key(),
             authority: self.authority.key(),
-
+            timestamp: now,
         });
 
         Ok(())
     }
-}
-
-#[error_code]
-pub enum ManageError {
-    #[msg("Only the mandate owner can perform this action")]
-    UnauthorizedOwner,
-    #[msg("Mandate is not approved")]
-    MandateNotApproved,
 }

@@ -1,8 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::Token;
 
-use crate::state::{DebitType, Mandate};
 use crate::events::MandateModifiedEvent;
+use crate::state::{DebitType, Mandate};
+use crate::errors::MandateError;
 
 #[derive(Accounts)]
 pub struct ModifyMandate<'info> {
@@ -13,7 +14,7 @@ pub struct ModifyMandate<'info> {
         mut,
         seeds = [b"mandate", mandate.id.to_le_bytes().as_ref()],
         bump = mandate.bump,
-        constraint = mandate.authority == authority.key() @ ManageError::InvalidAuthority,
+        constraint = mandate.authority == authority.key() @ MandateError::InvalidAuthority,
     )]
     pub mandate: Account<'info, Mandate>,
 
@@ -36,11 +37,12 @@ impl<'info> ModifyMandate<'info> {
     /// It requires the mandate to be approved before modification.
     pub fn modify(&mut self, args: ModifyMandateArgs) -> Result<()> {
         // Ensure mandate is approved before allowing modifications
-        require!(self.mandate.is_approved, ManageError::MandateNotApproved);
+        require!(self.mandate.is_approved, MandateError::MandateNotApproved);
 
         // Update mandate fields
         self.mandate.amount_per_debit = args.new_amount_per_debit;
         self.mandate.debit_type = args.new_debit_type;
+        self.mandate.is_unlimited_spend = args.new_is_unlimited_spend;
 
         let actual_new_limit = if args.new_is_unlimited_spend {
             u64::MAX
@@ -51,8 +53,9 @@ impl<'info> ModifyMandate<'info> {
 
         // Toggle the active state (optional, depending on intended modification)
         // self.mandate.is_active = !self.mandate.is_active;
+        let now = Clock::get()?.unix_timestamp;
 
-        self.mandate.updated_at = Clock::get()?.unix_timestamp;
+        self.mandate.updated_at = now;
 
         // Emit an event to signify the change
         emit!(MandateModifiedEvent {
@@ -65,16 +68,9 @@ impl<'info> ModifyMandate<'info> {
             new_debit_type: args.new_debit_type,
             new_is_active: self.mandate.is_active,
             new_is_approved: self.mandate.is_approved,
+            timestamp: now,
         });
 
         Ok(())
     }
-}
-
-#[error_code]
-pub enum ManageError {
-    #[msg("Invalid authority")]
-    InvalidAuthority,
-    #[msg("Mandate is not approved")]
-    MandateNotApproved,
 }

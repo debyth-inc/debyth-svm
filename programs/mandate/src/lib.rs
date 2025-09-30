@@ -6,6 +6,7 @@ declare_id!("ATMswjeXjUGfkxSo94seuuX4HLXcPwePdjnJc9FCvMaC");
 
 mod instructions;
 mod state;
+mod errors;
 
 use instructions::*;
 use instructions::ModifyMandateArgs;
@@ -25,7 +26,7 @@ pub mod mandate {
         Ok(())
     }
 
-    pub fn approve_mandate(ctx: Context<ApproveMandate>) -> Result<()> {
+    pub fn approve_mandate(ctx: Context<ApproveMandate>, mandate_id: u64) -> Result<()> {
         ctx.accounts.approve()?;
         Ok(())
     }

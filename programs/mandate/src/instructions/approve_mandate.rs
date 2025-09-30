@@ -4,7 +4,8 @@ use anchor_spl::{
     token::{approve, Approve, Mint, Token, TokenAccount},
 };
 
-use crate::state::state::Mandate;
+use crate::state::state::{Mandate, UNLIMITED_ALLOWANCE};
+use crate::errors::MandateError;
 
 #[derive(Accounts)]
 #[instruction(mandate_id: u64)]
@@ -13,10 +14,9 @@ pub struct ApproveMandate<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
-    // Authority is solely used for mandate validation and signing the delegate CPI.
-    // It is NOT marked as payer so that the user covers the fees.
-    pub authority: SystemAccount<'info>,
-
+    // // Authority is solely used for mandate validation and signing the delegate CPI.
+    // // It is NOT marked as payer so that the user covers the fees.
+    // pub authority: SystemAccount<'info>,
     /// The new mandate account to be created
     #[account(
         mut,
@@ -46,13 +46,10 @@ pub struct ApproveMandate<'info> {
 
 impl<'info> ApproveMandate<'info> {
     pub fn approve(&mut self) -> Result<()> {
-        let now = Clock::get()?.unix_timestamp;
-
         // Validate mandate state
-        require!(
-            !self.mandate.is_active && !self.mandate.is_approved,
-            MandateError::AlreadyApproved
-        );
+        // Fail early with clear errors for the two distinct states.
+        require!(!self.mandate.is_approved, MandateError::AlreadyApproved);
+        require!(!self.mandate.is_active, MandateError::AlreadyActive);
 
         // Validate token account
         require!(
@@ -79,7 +76,7 @@ impl<'info> ApproveMandate<'info> {
         // Since we don't have frequency, start_date, and end_date in the Mandate struct,
         // we'll just use the base amount
         let amount = if self.mandate.is_unlimited_spend {
-            u64::MAX
+            UNLIMITED_ALLOWANCE
         } else {
             self.mandate.limit
         };
@@ -88,20 +85,8 @@ impl<'info> ApproveMandate<'info> {
         // Update mandate state
         self.mandate.is_approved = true;
         self.mandate.is_active = true;
-        self.mandate.updated_at = now;
+        self.mandate.updated_at = Clock::get()?.unix_timestamp;
 
         Ok(())
     }
-}
-
-#[error_code]
-pub enum MandateError {
-    #[msg("Mandate is already approved or active")]
-    AlreadyApproved,
-    #[msg("Invalid token account")]
-    InvalidTokenAccount,
-    #[msg("Invalid mint")]
-    InvalidMint,
-    #[msg("Token account is already delegated")]
-    TokenAlreadyDelegated,
 }

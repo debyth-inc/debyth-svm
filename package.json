@@ -3,7 +3,13 @@
     "type": "module",
     "scripts": {
         "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
-        "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check"
+        "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
+        "test": "anchor test",
+        "test:all": "anchor test --skip-local-validator",
+        "test:create": "anchor test tests/create-mandate.test.ts",
+        "test:approve": "anchor test tests/approve-mandate.test.ts",
+        "test:execute": "anchor test tests/execute-mandate.test.ts",
+        "test:modify-cancel": "anchor test tests/modify-cancel-mandate.test.ts"
     },
     "dependencies": {
         "@coral-xyz/anchor": "^0.30.1",

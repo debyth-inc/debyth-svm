@@ -5,6 +5,7 @@ use anchor_spl::token::{
 
 use crate::state::{DebitType, Mandate};
 use crate::events::MandateExecutedEvent;
+use crate::errors::MandateError;
 
 #[derive(Accounts)]
 pub struct ExecuteMandate<'info> {
@@ -51,12 +52,17 @@ pub struct ExecuteMandateArgs {
 }
 
 impl<'info> ExecuteMandate<'info> {
-    pub fn execute(&mut self, args: ExecuteMandateArgs) -> Result<()> {
-        let now = Clock::get()?.unix_timestamp;
-        
+    pub fn execute(&mut self, args: ExecuteMandateArgs) -> Result<()> {        
         // Basic mandate validation
         require!(self.mandate.is_active, MandateError::MandateNotActive);
         require!(self.mandate.is_approved, MandateError::MandateNotApproved);
+
+        // Check debit frequency
+        let now = Clock::get()?.unix_timestamp;
+        require!(
+            self.mandate.last_debit_date + self.mandate.debit_frequency_seconds as i64 <= now,
+            MandateError::InsufficientTimeSinceLastDebit
+        );
 
         // Amount validation based on debit type
         match self.mandate.debit_type {
@@ -67,6 +73,10 @@ impl<'info> ExecuteMandate<'info> {
                 );
             },
             DebitType::Variable => {
+                require!(
+                    args.amount_to_debit > 0,
+                    MandateError::InvalidAmountForVariableDebit
+                );
                 require!(
                     args.amount_to_debit <= self.mandate.amount_per_debit,
                     MandateError::InvalidAmountForVariableDebit
@@ -115,6 +125,7 @@ impl<'info> ExecuteMandate<'info> {
 
         // Update last execution and total debited amount
         self.mandate.updated_at = now;
+        self.mandate.last_debit_date = now;
         self.mandate.total_debited_amount = self.mandate.total_debited_amount.checked_add(args.amount_to_debit).ok_or(ProgramError::ArithmeticOverflow)?;
 
         emit!(MandateExecutedEvent {
@@ -123,29 +134,9 @@ impl<'info> ExecuteMandate<'info> {
             user: self.mandate.user,
             amount_per_debit: self.mandate.amount_per_debit,
             total_debited_amount: self.mandate.total_debited_amount,
+            timestamp: now,
         });
 
         Ok(())
     }
-
-}
-
-#[error_code]
-pub enum MandateError {
-    #[msg("Mandate is not active")]
-    MandateNotActive,
-    #[msg("Mandate is not approved")]
-    MandateNotApproved,
-    #[msg("Invalid authority")]
-    InvalidAuthority,
-    #[msg("Invalid mint account")]
-    InvalidMint,
-    #[msg("Invalid token account")]
-    InvalidTokenAccount,
-    #[msg("Invalid amount for fixed debit")]
-    InvalidAmountForFixedDebit,
-    #[msg("Invalid amount for variable debit")]
-    InvalidAmountForVariableDebit,
-    #[msg("Debit limit exceeded")]
-    DebitLimitExceeded,
 }

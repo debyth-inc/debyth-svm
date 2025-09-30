@@ -1,5 +1,5 @@
-use anchor_lang::prelude::*;
 use crate::state::DebitType;
+use anchor_lang::prelude::*;
 
 #[event]
 pub struct MandateCreatedEvent {
@@ -15,6 +15,8 @@ pub struct MandateCreatedEvent {
     pub limit: u64,
     pub is_unlimited_spend: bool,
     pub debit_type: DebitType,
+    pub debit_frequency_seconds: u64,
+    pub timestamp: i64,
 }
 
 #[event]
@@ -27,6 +29,7 @@ pub struct MandateApprovedEvent {
     pub is_approved: bool,
     pub is_active: bool,
     pub created_at: i64,
+    pub timestamp: i64,
 }
 
 #[event]
@@ -39,6 +42,7 @@ pub struct MandateExecutedEvent {
     pub user: Pubkey,
     pub amount_per_debit: u64,
     pub total_debited_amount: u64,
+    pub timestamp: i64,
 }
 
 #[event]
@@ -55,6 +59,7 @@ pub struct MandateModifiedEvent {
     pub new_debit_type: DebitType,
     pub new_is_active: bool,
     pub new_is_approved: bool,
+    pub timestamp: i64,
 }
 
 #[event]
@@ -65,6 +70,7 @@ pub struct MandateCancelledEvent {
     pub authority: Pubkey,
     #[index]
     pub user: Pubkey,
+    pub timestamp: i64,
 }
 
 #[event]
@@ -74,4 +80,5 @@ pub struct MandateExpiredEvent {
     #[index]
     pub user: Pubkey,
     pub expired_at: i64,
+    pub timestamp: i64,
 }
