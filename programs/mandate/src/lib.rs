@@ -1,4 +1,5 @@
 #![allow(unexpected_cfgs)]
+#![allow(deprecated)]
 
 use anchor_lang::prelude::*;
 
@@ -26,7 +27,7 @@ pub mod mandate {
         Ok(())
     }
 
-    pub fn approve_mandate(ctx: Context<ApproveMandate>, mandate_id: u64) -> Result<()> {
+    pub fn approve_mandate(ctx: Context<ApproveMandate>, _mandate_id: u64) -> Result<()> {
         ctx.accounts.approve()?;
         Ok(())
     }
