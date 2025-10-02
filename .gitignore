@@ -5,6 +5,7 @@ target
 node_modules
 test-ledger
 .yarn
+.idea
 
 src/instructions/approve_mandate.rs
 *-wallet.json
