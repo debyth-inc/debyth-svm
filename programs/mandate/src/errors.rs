@@ -36,6 +36,13 @@ pub enum MandateError {
     InvalidSpendCap,
     #[msg("Insufficient time since last debit")]
     InsufficientTimeSinceLastDebit,
+
     #[msg("Token account is not delegated to the mandate program or has insufficient allowance")]
     NotDelegatedToProgram,
+    #[msg("Unauthorized user attempting to approve mandate")]
+    UnauthorizedUser,
+    #[msg("Insufficient token balance for debit")]
+    InsufficientBalance,
+    #[msg("Token account does not have the mandate as delegate")]
+    InvalidDelegate,
 }

@@ -84,7 +84,7 @@ describe("execute_mandate", () => {
                 .rpc();
             
             // Add delay to avoid time constraint issues
-            await new Promise(resolve => setTimeout(resolve, 100));
+            await new Promise(resolve => setTimeout(resolve, 1500));
         }
 
         // 11th execution should fail
@@ -177,7 +177,7 @@ describe("variable debit mandate", () => {
             totalDebited += amount;
             
             // Add delay to avoid time constraint issues
-            await new Promise(resolve => setTimeout(resolve, 100));
+            await new Promise(resolve => setTimeout(resolve, 1500));
         }
 
         const mandateAccount = await context.program.account.mandate.fetch(

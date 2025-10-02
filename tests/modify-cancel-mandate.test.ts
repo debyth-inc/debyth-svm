@@ -92,15 +92,15 @@ describe("cancel_mandate", () => {
         await context.program.methods
             .cancelMandate()
             .accountsPartial({
-                user: context.user.publicKey,
-                authority: context.authority.publicKey,
+                signer: context.user.publicKey, // User is the signer
+                user: context.user.publicKey, // Same as signer for user cancellation
                 mandate: context.mandatePda,
                 mint: context.mint,
                 userTokenAccount: context.userTokenAccount,
                 tokenProgram: TOKEN_PROGRAM_ID,
                 systemProgram: anchor.web3.SystemProgram.programId,
             })
-            .signers([context.user])
+            .signers([context.user]) // User signs
             .rpc();
 
         // Expect the account to be closed, so fetching it should fail
@@ -116,15 +116,15 @@ describe("cancel_mandate", () => {
         await context.program.methods
             .cancelMandate()
             .accountsPartial({
-                user: context.user.publicKey,
-                authority: context.authority.publicKey,
+                signer: context.authority.publicKey, // Authority is the signer
+                user: context.user.publicKey, // User for validation
                 mandate: context.mandatePda,
                 mint: context.mint,
-                userTokenAccount: context.userTokenAccount,
+                userTokenAccount: context.userTokenAccount, // User's token account
                 tokenProgram: TOKEN_PROGRAM_ID,
                 systemProgram: anchor.web3.SystemProgram.programId,
             })
-            .signers([context.authority])
+            .signers([context.authority]) // Authority signs
             .rpc();
 
         // Expect the account to be closed, so fetching it should fail
@@ -147,8 +147,8 @@ describe("cancel_mandate", () => {
             await context.program.methods
                 .cancelMandate()
                 .accountsPartial({
-                    user: unauthorizedUser.publicKey,
-                    authority: context.authority.publicKey,
+                    signer: unauthorizedUser.publicKey,
+                    user: context.user.publicKey,
                     mandate: context.mandatePda,
                     mint: context.mint,
                     userTokenAccount: context.userTokenAccount,
@@ -160,7 +160,7 @@ describe("cancel_mandate", () => {
 
             expect.fail("Should have failed with unauthorized user");
         } catch (error) {
-            expect(error.error.errorCode.code).to.equal("UnauthorizedOwner");
+            expect(error.error?.errorCode?.code || error.message).to.include("UnauthorizedOwner");
         }
     });
 });

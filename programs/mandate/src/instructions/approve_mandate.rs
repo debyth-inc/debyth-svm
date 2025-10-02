@@ -46,6 +46,11 @@ pub struct ApproveMandate<'info> {
 
 impl<'info> ApproveMandate<'info> {
     pub fn approve(&mut self) -> Result<()> {
+        // Validate that the user actually matches the mandate user
+        require!(
+            self.user.key() == self.mandate.user,
+            MandateError::UnauthorizedUser
+        );
         // Validate mandate state
         // Fail early with clear errors for the two distinct states.
         require!(!self.mandate.is_approved, MandateError::AlreadyApproved);
@@ -65,6 +70,11 @@ impl<'info> ApproveMandate<'info> {
             MandateError::TokenAlreadyDelegated
         );
 
+        // SECURITY FIX 1: Update the state BEFORE external call
+        self.mandate.is_approved = true;
+        self.mandate.is_active = true;
+        self.mandate.updated_at = Clock::get()?.unix_timestamp;
+
         // Approve token delegation
         let cpi_program = self.token_program.to_account_info();
         let cpi_accounts = Approve {
@@ -73,8 +83,6 @@ impl<'info> ApproveMandate<'info> {
             delegate: self.mandate.to_account_info(),
         };
 
-        // Since we don't have frequency, start_date, and end_date in the Mandate struct,
-        // we'll just use the base amount
         let amount = if self.mandate.is_unlimited_spend {
             UNLIMITED_ALLOWANCE
         } else {
@@ -82,10 +90,16 @@ impl<'info> ApproveMandate<'info> {
         };
         approve(CpiContext::new(cpi_program, cpi_accounts), amount)?;
 
-        // Update mandate state
-        self.mandate.is_approved = true;
-        self.mandate.is_active = true;
-        self.mandate.updated_at = Clock::get()?.unix_timestamp;
+        // SECURITY FIX 7: Emit approval event for monitoring
+        emit!(crate::events::MandateApprovedEvent {
+            mandate_id: self.mandate.id,
+            user: self.user.key(),
+            amount_per_debit: self.mandate.amount_per_debit,
+            is_approved: self.mandate.is_approved,
+            is_active: self.mandate.is_active,
+            created_at: self.mandate.created_at,
+            timestamp: self.mandate.updated_at,
+        });
 
         Ok(())
     }

@@ -3,7 +3,7 @@
 
 use anchor_lang::prelude::*;
 
-declare_id!("ATMswjeXjUGfkxSo94seuuX4HLXcPwePdjnJc9FCvMaC");
+declare_id!("CtUQeRyYYBN1P9bnqogVDDi6UeHbF96Rpinj6cyGentp");
 
 mod instructions;
 mod state;
@@ -14,6 +14,7 @@ use instructions::ModifyMandateArgs;
 
 pub mod events;
 
+#[allow(deprecated)]
 #[program]
 pub mod mandate {
     use super::*;
@@ -31,6 +32,7 @@ pub mod mandate {
         ctx.accounts.approve()?;
         Ok(())
     }
+    
     pub fn execute_mandate(ctx: Context<ExecuteMandate>, args: ExecuteMandateArgs) -> Result<()> {
         ctx.accounts.execute(args)?;
         Ok(())

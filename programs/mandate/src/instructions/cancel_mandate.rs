@@ -8,16 +8,17 @@ use crate::errors::MandateError;
 #[derive(Accounts)]
 pub struct CancelMandate<'info> {
     #[account(mut)]
-    pub user: Signer<'info>,
+    pub signer: Signer<'info>, // Whoever is cancelling (user or authority)
 
-    pub authority: SystemAccount<'info>,
+    /// CHECK: The actual user of the mandate (for validation). This is validated against the mandate.user field in the constraint below.
+    pub user: UncheckedAccount<'info>,
 
     #[account(
         mut,
-        close = user,
+        close = signer, // Rent goes to the signer
         seeds = [b"mandate", mandate.id.to_le_bytes().as_ref()],
         bump = mandate.bump,
-        constraint = mandate.user == user.key() || mandate.authority == user.key() @ MandateError::UnauthorizedOwner,
+        constraint = mandate.user == signer.key() || mandate.authority == signer.key() @ MandateError::UnauthorizedOwner,
     )]
     pub mandate: Account<'info, Mandate>,
 
@@ -26,9 +27,8 @@ pub struct CancelMandate<'info> {
     #[account(
         mut,
         associated_token::mint = mint,
-        associated_token::authority = user,
+        associated_token::authority = mandate.user, // Always the mandate user's token account
         associated_token::token_program = token_program,
-        constraint = user_token_account.owner == user.key()
     )]
     pub user_token_account: Account<'info, TokenAccount>,
 
@@ -40,21 +40,23 @@ impl<'info> CancelMandate<'info> {
     pub fn cancel(&mut self) -> Result<()> {
         // Verify mandate owner (redundant with account constraint, but kept for safety)
         require!(
-            self.user.key() == self.mandate.user || self.user.key() == self.mandate.authority,
+            self.signer.key() == self.mandate.user || self.signer.key() == self.mandate.authority,
             MandateError::UnauthorizedOwner
         );
 
         // Verify mandate status
         require!(self.mandate.is_approved, MandateError::MandateNotApproved);
 
-        // Revoke token approval
-        let cpi_program = self.token_program.to_account_info();
-        let cpi_accounts = Revoke {
-            source: self.user_token_account.to_account_info(),
-            authority: self.user.to_account_info(),
-        };
-        let cpi_context = CpiContext::new(cpi_program, cpi_accounts);
-        revoke(cpi_context)?;
+        // Only revoke if the signer is the user (authority can't revoke user's tokens)
+        if self.signer.key() == self.mandate.user {
+            let cpi_program = self.token_program.to_account_info();
+            let cpi_accounts = Revoke {
+                source: self.user_token_account.to_account_info(),
+                authority: self.signer.to_account_info(), // User signs for revoke
+            };
+            let cpi_context = CpiContext::new(cpi_program, cpi_accounts);
+            revoke(cpi_context)?;
+        }
 
         let now = Clock::get()?.unix_timestamp;
 
@@ -67,7 +69,7 @@ impl<'info> CancelMandate<'info> {
         emit!(MandateCancelledEvent {
             mandate_id: self.mandate.id,
             user: self.user.key(),
-            authority: self.authority.key(),
+            authority: self.mandate.authority,
             timestamp: now,
         });
 

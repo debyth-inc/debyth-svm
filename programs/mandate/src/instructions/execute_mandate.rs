@@ -57,11 +57,20 @@ impl<'info> ExecuteMandate<'info> {
         require!(self.mandate.is_active, MandateError::MandateNotActive);
         require!(self.mandate.is_approved, MandateError::MandateNotApproved);
 
-        // Check debit frequency
+        // Check debit frequency FIRST (before other validations)
         let now = Clock::get()?.unix_timestamp;
         require!(
             self.mandate.last_debit_date + self.mandate.debit_frequency_seconds as i64 <= now,
             MandateError::InsufficientTimeSinceLastDebit
+        );
+
+        // SECURITY FIX 3: Use checked arithmetic for limit check EARLY
+        let new_total = self.mandate.total_debited_amount.checked_add(args.amount_to_debit)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+        
+        require!(
+            new_total <= self.mandate.limit,
+            MandateError::DebitLimitExceeded
         );
 
         // Amount validation based on debit type
@@ -83,10 +92,17 @@ impl<'info> ExecuteMandate<'info> {
                 );
             }
         }
-        // Check if debit exceeds total limit
+
+        // SECURITY FIX 5: Check if the user has sufficient balance
         require!(
-            self.mandate.total_debited_amount + args.amount_to_debit <= self.mandate.limit,
-            MandateError::DebitLimitExceeded
+            self.user_token_account.amount >= args.amount_to_debit,
+            MandateError::InsufficientBalance
+        );
+
+        // SECURITY FIX 2: Validate that the delegate is still active
+        require!(
+            self.user_token_account.delegate == Some(self.mandate.key()).into(),
+            MandateError::InvalidDelegate
         );
 
         // Token account validation
@@ -100,7 +116,7 @@ impl<'info> ExecuteMandate<'info> {
         );
 
         // Execute the transfer
-       let cpi_program = self.token_program.to_account_info();
+        let cpi_program = self.token_program.to_account_info();
         let seeds: &[&[u8]] = &[
             b"mandate",
             &self.mandate.id.to_le_bytes(),
@@ -123,10 +139,10 @@ impl<'info> ExecuteMandate<'info> {
             self.mint.decimals,
         )?;
 
-        // Update last execution and total debited amount
+        // Update last execution and total debited amount (using the checked value)
         self.mandate.updated_at = now;
         self.mandate.last_debit_date = now;
-        self.mandate.total_debited_amount = self.mandate.total_debited_amount.checked_add(args.amount_to_debit).ok_or(ProgramError::ArithmeticOverflow)?;
+        self.mandate.total_debited_amount = new_total; // Safe assignment
 
         emit!(MandateExecutedEvent {
             mandate_id: self.mandate.id,

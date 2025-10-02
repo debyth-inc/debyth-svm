@@ -73,7 +73,7 @@ describe("approve_mandate", () => {
             expect.fail("Should have failed with wrong user");
         } catch (error) {
             // This should fail due to PDA derivation or account constraint
-            expect(error.error?.errorCode?.code || error.error?.code).to.equal("Unauthorized");
+            expect(error.error?.errorCode?.code || error.error?.code).to.equal("UnauthorizedUser");
         }
     });
 });
