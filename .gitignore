@@ -8,4 +8,4 @@ test-ledger
 .idea
 
 src/instructions/approve_mandate.rs
-*-wallet.json
+*-wallet.json.idea/
