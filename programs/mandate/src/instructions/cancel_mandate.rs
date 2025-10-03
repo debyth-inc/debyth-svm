@@ -47,8 +47,10 @@ impl<'info> CancelMandate<'info> {
         // Verify mandate status
         require!(self.mandate.is_approved, MandateError::MandateNotApproved);
 
-        // Only revoke if the signer is the user (authority can't revoke user's tokens)
+        // Authority should be able to cancel mandate for security (if contract is compromised)
+        // However, only the user can revoke their own token delegation
         if self.signer.key() == self.mandate.user {
+            // User is cancelling - revoke the token delegation
             let cpi_program = self.token_program.to_account_info();
             let cpi_accounts = Revoke {
                 source: self.user_token_account.to_account_info(),
@@ -57,6 +59,8 @@ impl<'info> CancelMandate<'info> {
             let cpi_context = CpiContext::new(cpi_program, cpi_accounts);
             revoke(cpi_context)?;
         }
+        // Quick note: If authority now actually cancels, then mandate will become inactive but delegation remains
+        // User should manually revoke delegation after authority emergency cancellation
 
         let now = Clock::get()?.unix_timestamp;
 

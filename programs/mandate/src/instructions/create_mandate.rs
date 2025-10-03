@@ -5,7 +5,7 @@ use anchor_spl::{
 };
 
 use crate::events::MandateCreatedEvent;
-use crate::state::{DebitType, Mandate};
+use crate::state::{DebitType, Mandate, UNLIMITED_ALLOWANCE};
 
 use crate::errors::MandateError;
 
@@ -76,7 +76,7 @@ impl<'info> CreateMandate<'info> {
         );
 
         let actual_limit = if args.is_unlimited_spend {
-            u64::MAX
+            UNLIMITED_ALLOWANCE
         } else {
             args.limit
         };

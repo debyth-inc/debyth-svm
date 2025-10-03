@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::Token;
 
 use crate::events::MandateModifiedEvent;
-use crate::state::{DebitType, Mandate};
+use crate::state::{DebitType, Mandate, UNLIMITED_ALLOWANCE};
 use crate::errors::MandateError;
 
 #[derive(Accounts)]
@@ -45,7 +45,7 @@ impl<'info> ModifyMandate<'info> {
         self.mandate.is_unlimited_spend = args.new_is_unlimited_spend;
 
         let actual_new_limit = if args.new_is_unlimited_spend {
-            u64::MAX
+            UNLIMITED_ALLOWANCE
         } else {
             args.new_limit
         };
