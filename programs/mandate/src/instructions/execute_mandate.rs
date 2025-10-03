@@ -1,11 +1,9 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{
-    transfer_checked, Mint, Token, TokenAccount, TransferChecked,
-};
+use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked};
 
-use crate::state::{DebitType, Mandate};
-use crate::events::MandateExecutedEvent;
 use crate::errors::MandateError;
+use crate::events::MandateExecutedEvent;
+use crate::state::{DebitType, Mandate};
 
 #[derive(Accounts)]
 pub struct ExecuteMandate<'info> {
@@ -35,7 +33,7 @@ pub struct ExecuteMandate<'info> {
     pub user_token_account: Account<'info, TokenAccount>,
 
     #[account(
-        mut, 
+        mut,
         associated_token::mint = mint,
         associated_token::authority = mandate.authority,
         associated_token::token_program = token_program,
@@ -52,7 +50,7 @@ pub struct ExecuteMandateArgs {
 }
 
 impl<'info> ExecuteMandate<'info> {
-    pub fn execute(&mut self, args: ExecuteMandateArgs) -> Result<()> {        
+    pub fn execute(&mut self, args: ExecuteMandateArgs) -> Result<()> {
         // Basic mandate validation
         require!(self.mandate.is_active, MandateError::MandateNotActive);
         require!(self.mandate.is_approved, MandateError::MandateNotApproved);
@@ -65,9 +63,12 @@ impl<'info> ExecuteMandate<'info> {
         );
 
         // SECURITY FIX 3: Use checked arithmetic for limit check EARLY
-        let new_total = self.mandate.total_debited_amount.checked_add(args.amount_to_debit)
+        let new_total = self
+            .mandate
+            .total_debited_amount
+            .checked_add(args.amount_to_debit)
             .ok_or(ProgramError::ArithmeticOverflow)?;
-        
+
         require!(
             new_total <= self.mandate.limit,
             MandateError::DebitLimitExceeded
@@ -80,7 +81,7 @@ impl<'info> ExecuteMandate<'info> {
                     self.mandate.amount_per_debit == args.amount_to_debit,
                     MandateError::InvalidAmountForFixedDebit
                 );
-            },
+            }
             DebitType::Variable => {
                 require!(
                     args.amount_to_debit > 0,

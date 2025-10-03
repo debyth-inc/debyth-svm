@@ -1,9 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{revoke, Mint, Revoke, Token, TokenAccount};
 
+use crate::errors::MandateError;
 use crate::events::MandateCancelledEvent;
 use crate::state::Mandate;
-use crate::errors::MandateError;
 
 #[derive(Accounts)]
 pub struct CancelMandate<'info> {

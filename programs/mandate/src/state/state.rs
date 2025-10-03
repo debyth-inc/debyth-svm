@@ -3,19 +3,19 @@ use anchor_lang::prelude::*;
 #[account]
 pub struct Mandate {
     // Essential on-chain data
-    pub id: u64,                   // Required for PDA
-    pub authority: Pubkey,         // Required for validation
-    pub user: Pubkey,              // Required for validation
-    pub bump: u8,                  // Required for PDA
-    pub mint: Pubkey,              // Required for token operations
-    pub amount_per_debit: u64,     // Required for debit cap
-    pub limit: u64,                // Total amount that can ever be debited
-    pub total_debited_amount: u64, // Cumulative amount debited so far
-    pub is_unlimited_spend: bool,  // Required for validation
-    pub debit_type: DebitType,     // Required for validation
-    pub is_approved: bool,         // Required state
-    pub is_active: bool,           // Required state
-    pub last_debit_date: i64,      // Required for frequency validation
+    pub id: u64,                      // Required for PDA
+    pub authority: Pubkey,            // Required for validation
+    pub user: Pubkey,                 // Required for validation
+    pub bump: u8,                     // Required for PDA
+    pub mint: Pubkey,                 // Required for token operations
+    pub amount_per_debit: u64,        // Required for debit cap
+    pub limit: u64,                   // Total amount that can ever be debited
+    pub total_debited_amount: u64,    // Cumulative amount debited so far
+    pub is_unlimited_spend: bool,     // Required for validation
+    pub debit_type: DebitType,        // Required for validation
+    pub is_approved: bool,            // Required state
+    pub is_active: bool,              // Required state
+    pub last_debit_date: i64,         // Required for frequency validation
     pub debit_frequency_seconds: u64, // New field for debit frequency
     pub created_at: i64,
     pub updated_at: i64,

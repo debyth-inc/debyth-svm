@@ -1,9 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::Token;
 
+use crate::errors::MandateError;
 use crate::events::MandateModifiedEvent;
 use crate::state::{DebitType, Mandate, UNLIMITED_ALLOWANCE};
-use crate::errors::MandateError;
 
 #[derive(Accounts)]
 pub struct ModifyMandate<'info> {

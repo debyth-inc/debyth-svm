@@ -5,12 +5,12 @@ use anchor_lang::prelude::*;
 
 declare_id!("CtUQeRyYYBN1P9bnqogVDDi6UeHbF96Rpinj6cyGentp");
 
+mod errors;
 mod instructions;
 mod state;
-mod errors;
 
-use instructions::*;
 use instructions::ModifyMandateArgs;
+use instructions::*;
 
 pub mod events;
 
@@ -32,7 +32,7 @@ pub mod mandate {
         ctx.accounts.approve()?;
         Ok(())
     }
-    
+
     pub fn execute_mandate(ctx: Context<ExecuteMandate>, args: ExecuteMandateArgs) -> Result<()> {
         ctx.accounts.execute(args)?;
         Ok(())
