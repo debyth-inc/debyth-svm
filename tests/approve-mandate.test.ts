@@ -4,51 +4,47 @@ import { expect } from "chai";
 import { TestFactory, TestContext } from "./test-factory";
 import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
 
-describe("approve_mandate", () => {
+describe("Mandate Approval", () => {
     const testFactory = TestFactory.getInstance();
     let context: TestContext;
 
     beforeEach(async () => {
         context = await testFactory.createTestContext();
-        // Create mandate first
         await testFactory.createMandate(context);
     });
 
-    it("should approve a mandate", async () => {
+    it("approves a mandate and activates it", async () => {
         await testFactory.approveMandate(context);
 
-        const mandateAccount = await context.program.account.mandate.fetch(
-            context.mandatePda
-        );
-        expect(mandateAccount.isApproved).to.be.true;
-        expect(mandateAccount.isActive).to.be.true;
+        const mandate = await context.program.account.mandate.fetch(context.mandatePda);
+
+        expect(mandate.isApproved).to.be.true;
+        expect(mandate.isActive).to.be.true;
     });
 
-    it("should fail to approve already approved mandate", async () => {
-        // First approval
+    it("rejects double approval of same mandate", async () => {
         await testFactory.approveMandate(context);
 
-        // Second approval should fail
         try {
             await testFactory.approveMandate(context);
-            expect.fail("Should have failed to approve already approved mandate");
+            expect.fail("Should have rejected already approved mandate");
         } catch (error) {
             expect(error.error.errorCode.code).to.equal("AlreadyApproved");
         }
     });
 
-    it("should fail if wrong user tries to approve", async () => {
-        const wrongUser = Keypair.generate();
+    it("rejects approval attempt by unauthorized user", async () => {
+        const unauthorizedUser = Keypair.generate();
         await testFactory.airdropAndConfirm(
-            wrongUser.publicKey,
+            unauthorizedUser.publicKey,
             anchor.web3.LAMPORTS_PER_SOL
         );
 
-        const wrongUserTokenAccount = await getOrCreateAssociatedTokenAccount(
+        const unauthorizedUserTokenAccount = await getOrCreateAssociatedTokenAccount(
             testFactory.getConnection(),
-            wrongUser,
+            unauthorizedUser,
             context.mint,
-            wrongUser.publicKey,
+            unauthorizedUser.publicKey,
             false,
             undefined,
             undefined,
@@ -59,20 +55,19 @@ describe("approve_mandate", () => {
             await context.program.methods
                 .approveMandate(context.mandateId)
                 .accountsPartial({
-                    user: wrongUser.publicKey,
+                    user: unauthorizedUser.publicKey,
                     mandate: context.mandatePda,
                     mint: context.mint,
-                    userTokenAccount: wrongUserTokenAccount.address,
+                    userTokenAccount: unauthorizedUserTokenAccount.address,
                     associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
                     tokenProgram: TOKEN_PROGRAM_ID,
                     systemProgram: anchor.web3.SystemProgram.programId,
                 })
-                .signers([wrongUser])
+                .signers([unauthorizedUser])
                 .rpc();
 
-            expect.fail("Should have failed with wrong user");
+            expect.fail("Should have rejected unauthorized user approval");
         } catch (error) {
-            // This should fail due to PDA derivation or account constraint
             expect(error.error?.errorCode?.code || error.error?.code).to.equal("UnauthorizedUser");
         }
     });

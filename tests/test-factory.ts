@@ -10,18 +10,25 @@ import {
 } from "@solana/spl-token";
 import { Mandate } from "../target/types/mandate";
 
+/**
+ * Test context containing all accounts and configuration needed for mandate tests
+ */
 export interface TestContext {
     program: Program<Mandate>;
     connection: anchor.web3.Connection;
-    authority: Keypair;
-    user: Keypair;
-    mint: PublicKey;
-    mandateId: anchor.BN;
-    mandatePda: PublicKey;
-    userTokenAccount: PublicKey;
-    authorityTokenAccount: PublicKey;
+    authority: Keypair;           // The service provider who creates and executes mandates
+    user: Keypair;                 // The token owner who approves mandates
+    mint: PublicKey;               // The SPL token mint
+    mandateId: anchor.BN;          // Unique identifier for the mandate
+    mandatePda: PublicKey;         // Program derived address for the mandate account
+    userTokenAccount: PublicKey;   // User's associated token account (source of debits)
+    authorityTokenAccount: PublicKey; // Authority's associated token account (destination)
 }
 
+/**
+ * Factory for creating and managing test contexts and common mandate operations
+ * Uses singleton pattern to share program and connection instances across tests
+ */
 export class TestFactory {
     private static instance: TestFactory;
     private program: Program<Mandate>;
@@ -49,46 +56,45 @@ export class TestFactory {
         return this.connection;
     }
 
+    /**
+     * Airdrops SOL to an account and waits for confirmation
+     */
     public async airdropAndConfirm(
-        pubkey: PublicKey,
+        publicKey: PublicKey,
         lamports: number
     ): Promise<void> {
-        const sig = await this.connection.requestAirdrop(pubkey, lamports);
-        const latest = await this.connection.getLatestBlockhash();
+        const signature = await this.connection.requestAirdrop(publicKey, lamports);
+        const latestBlockhash = await this.connection.getLatestBlockhash();
         await this.connection.confirmTransaction({
-            signature: sig,
-            blockhash: latest.blockhash,
-            lastValidBlockHeight: latest.lastValidBlockHeight,
+            signature,
+            blockhash: latestBlockhash.blockhash,
+            lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
         });
     }
 
+    /**
+     * Creates a fresh test context with new accounts and initial token balances
+     * Each context is isolated to prevent test interference
+     */
     public async createTestContext(): Promise<TestContext> {
-        // Create new keypairs for each test
         const authority = Keypair.generate();
         const user = Keypair.generate();
         const mandateId = new anchor.BN(Math.floor(Math.random() * 1000000));
 
-        // Airdrop SOL to accounts
-        await this.airdropAndConfirm(
-            authority.publicKey,
-            2 * anchor.web3.LAMPORTS_PER_SOL
-        );
-        await this.airdropAndConfirm(
-            user.publicKey,
-            2 * anchor.web3.LAMPORTS_PER_SOL
-        );
+        const SOL_AIRDROP_AMOUNT = 2 * anchor.web3.LAMPORTS_PER_SOL;
+        await this.airdropAndConfirm(authority.publicKey, SOL_AIRDROP_AMOUNT);
+        await this.airdropAndConfirm(user.publicKey, SOL_AIRDROP_AMOUNT);
 
-        // Create mint
+        const DECIMALS = 6;
         const mint = await createMint(
             this.connection,
             authority,
             authority.publicKey,
             null,
-            6
+            DECIMALS
         );
 
-        // Create token accounts
-        const uTa = await getOrCreateAssociatedTokenAccount(
+        const userTokenAccountInfo = await getOrCreateAssociatedTokenAccount(
             this.connection,
             user,
             mint,
@@ -98,9 +104,8 @@ export class TestFactory {
             undefined,
             TOKEN_PROGRAM_ID
         );
-        const userTokenAccount = uTa.address;
 
-        const aTa = await getOrCreateAssociatedTokenAccount(
+        const authorityTokenAccountInfo = await getOrCreateAssociatedTokenAccount(
             this.connection,
             authority,
             mint,
@@ -110,19 +115,17 @@ export class TestFactory {
             undefined,
             TOKEN_PROGRAM_ID
         );
-        const authorityTokenAccount = aTa.address;
 
-        // Mint tokens to user
+        const INITIAL_USER_BALANCE = 1_000_000; // 1,000 tokens with 6 decimals
         await mintTo(
             this.connection,
             authority,
             mint,
-            userTokenAccount,
+            userTokenAccountInfo.address,
             authority,
-            1000000 // 1,000 tokens with 6 decimals
+            INITIAL_USER_BALANCE
         );
 
-        // Derive mandate PDA
         const [mandatePda] = PublicKey.findProgramAddressSync(
             [Buffer.from("mandate"), mandateId.toArrayLike(Buffer, "le", 8)],
             this.program.programId
@@ -136,11 +139,15 @@ export class TestFactory {
             mint,
             mandateId,
             mandatePda,
-            userTokenAccount,
-            authorityTokenAccount,
+            userTokenAccount: userTokenAccountInfo.address,
+            authorityTokenAccount: authorityTokenAccountInfo.address,
         };
     }
 
+    /**
+     * Creates a mandate with optional custom parameters
+     * Defaults to a fixed debit type with standard limits
+     */
     public async createMandate(
         context: TestContext,
         options: {
@@ -151,12 +158,16 @@ export class TestFactory {
             debitFrequencySeconds?: anchor.BN;
         } = {}
     ): Promise<void> {
+        const DEFAULT_AMOUNT_PER_DEBIT = new anchor.BN(100_000);  // 0.1 tokens
+        const DEFAULT_LIMIT = new anchor.BN(1_000_000);            // 1 token total
+        const DEFAULT_FREQUENCY = new anchor.BN(60);               // 60 seconds
+
         const {
-            amountPerDebit = new anchor.BN(100000),
-            limit = new anchor.BN(1000000),
+            amountPerDebit = DEFAULT_AMOUNT_PER_DEBIT,
+            limit = DEFAULT_LIMIT,
             isUnlimitedSpend = false,
             debitType = { fixed: {} },
-            debitFrequencySeconds = new anchor.BN(60),
+            debitFrequencySeconds = DEFAULT_FREQUENCY,
         } = options;
 
         await context.program.methods
@@ -181,6 +192,9 @@ export class TestFactory {
             .rpc();
     }
 
+    /**
+     * Approves an existing mandate as the user
+     */
     public async approveMandate(context: TestContext): Promise<void> {
         await context.program.methods
             .approveMandate(context.mandateId)
@@ -197,6 +211,10 @@ export class TestFactory {
             .rpc();
     }
 
+    /**
+     * Helper to create and immediately approve a mandate
+     * Useful for tests that need an active mandate as a starting point
+     */
     public async createAndApproveMandate(
         context: TestContext,
         options?: {
@@ -209,6 +227,60 @@ export class TestFactory {
     ): Promise<void> {
         await this.createMandate(context, options);
         await this.approveMandate(context);
+    }
+
+    /**
+     * Fixture: Creates an approved fixed debit mandate with standard parameters
+     */
+    public async createApprovedFixedMandate(
+        context: TestContext,
+        options?: {
+            amountPerDebit?: anchor.BN;
+            limit?: anchor.BN;
+            debitFrequencySeconds?: anchor.BN;
+        }
+    ): Promise<void> {
+        await this.createAndApproveMandate(context, {
+            ...options,
+            debitType: { fixed: {} },
+            isUnlimitedSpend: false,
+        });
+    }
+
+    /**
+     * Fixture: Creates an approved variable debit mandate with standard parameters
+     */
+    public async createApprovedVariableMandate(
+        context: TestContext,
+        options?: {
+            amountPerDebit?: anchor.BN;
+            limit?: anchor.BN;
+            debitFrequencySeconds?: anchor.BN;
+        }
+    ): Promise<void> {
+        await this.createAndApproveMandate(context, {
+            ...options,
+            debitType: { variable: {} },
+            isUnlimitedSpend: false,
+        });
+    }
+
+    /**
+     * Fixture: Creates an approved unlimited spending mandate
+     */
+    public async createApprovedUnlimitedMandate(
+        context: TestContext,
+        options?: {
+            amountPerDebit?: anchor.BN;
+            debitType?: { fixed: {} } | { variable: {} };
+            debitFrequencySeconds?: anchor.BN;
+        }
+    ): Promise<void> {
+        await this.createAndApproveMandate(context, {
+            ...options,
+            limit: new anchor.BN(0),
+            isUnlimitedSpend: true,
+        });
     }
 }
 

@@ -2,7 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { expect } from "chai";
 import { TestFactory, TestContext } from "./test-factory";
 
-describe("create_mandate", () => {
+describe("Mandate Creation", () => {
     const testFactory = TestFactory.getInstance();
     let context: TestContext;
 
@@ -10,79 +10,66 @@ describe("create_mandate", () => {
         context = await testFactory.createTestContext();
     });
 
-    it("should create a mandate with fixed debit type", async () => {
-        const amountPerDebit = new anchor.BN(1000000); // 1 tokens
-        const limit = new anchor.BN(2000000000); // 20 tokens
-        const debitFrequencySeconds = new anchor.BN(60);
+    it("creates a mandate with fixed debit type and limited spending", async () => {
+        const AMOUNT_PER_DEBIT = new anchor.BN(1_000_000);  // 1 token
+        const TOTAL_LIMIT = new anchor.BN(20_000_000);      // 20 tokens
+        const DEBIT_FREQUENCY_SECONDS = new anchor.BN(60);
 
         await testFactory.createMandate(context, {
-            amountPerDebit,
-            limit,
+            amountPerDebit: AMOUNT_PER_DEBIT,
+            limit: TOTAL_LIMIT,
             isUnlimitedSpend: false,
             debitType: { fixed: {} },
-            debitFrequencySeconds,
+            debitFrequencySeconds: DEBIT_FREQUENCY_SECONDS,
         });
 
-        // Fetch the mandate account
-        const mandateAccount = await context.program.account.mandate.fetch(
-            context.mandatePda
-        );
+        const mandate = await context.program.account.mandate.fetch(context.mandatePda);
 
-        expect(mandateAccount.id.toString()).to.equal(context.mandateId.toString());
-        expect(mandateAccount.authority.toString()).to.equal(
-            context.authority.publicKey.toString()
-        );
-        expect(mandateAccount.user.toString()).to.equal(
-            context.user.publicKey.toString()
-        );
-        expect(mandateAccount.mint.toString()).to.equal(context.mint.toString());
-        expect(mandateAccount.amountPerDebit.toString()).to.equal(
-            amountPerDebit.toString()
-        );
-        expect(mandateAccount.limit.toString()).to.equal(limit.toString());
-        expect(mandateAccount.isUnlimitedSpend).to.be.false;
-        expect(mandateAccount.debitType).to.deep.equal({ fixed: {} });
-        expect(mandateAccount.isApproved).to.be.false;
-        expect(mandateAccount.isActive).to.be.false;
-        expect(mandateAccount.totalDebitedAmount.toString()).to.equal("0");
+        expect(mandate.id.toString()).to.equal(context.mandateId.toString());
+        expect(mandate.authority.toString()).to.equal(context.authority.publicKey.toString());
+        expect(mandate.user.toString()).to.equal(context.user.publicKey.toString());
+        expect(mandate.mint.toString()).to.equal(context.mint.toString());
+        expect(mandate.amountPerDebit.toString()).to.equal(AMOUNT_PER_DEBIT.toString());
+        expect(mandate.limit.toString()).to.equal(TOTAL_LIMIT.toString());
+        expect(mandate.isUnlimitedSpend).to.be.false;
+        expect(mandate.debitType).to.deep.equal({ fixed: {} });
+        expect(mandate.isApproved).to.be.false;
+        expect(mandate.isActive).to.be.false;
+        expect(mandate.totalDebitedAmount.toString()).to.equal("0");
     });
 
-    it("should create a mandate with variable debit type and unlimited spend", async () => {
-        const amountPerDebit = new anchor.BN(1000000); // 1 token
-        const limit = new anchor.BN(0); // Variable amount // Unlimited
-        const debitFrequencySeconds = new anchor.BN(60);
+    it("creates a mandate with variable debit type and unlimited spending", async () => {
+        const AMOUNT_PER_DEBIT = new anchor.BN(1_000_000);  // 1 token
+        const LIMIT = new anchor.BN(0);                      // Not enforced when unlimited
+        const DEBIT_FREQUENCY_SECONDS = new anchor.BN(60);
 
         await testFactory.createMandate(context, {
-            amountPerDebit,
-            limit,
+            amountPerDebit: AMOUNT_PER_DEBIT,
+            limit: LIMIT,
             isUnlimitedSpend: true,
             debitType: { variable: {} },
-            debitFrequencySeconds,
+            debitFrequencySeconds: DEBIT_FREQUENCY_SECONDS,
         });
 
-        const mandateAccount = await context.program.account.mandate.fetch(
-            context.mandatePda
-        );
+        const mandate = await context.program.account.mandate.fetch(context.mandatePda);
 
-        expect(mandateAccount.isUnlimitedSpend).to.be.true;
-        expect(mandateAccount.debitType).to.deep.equal({ variable: {} });
+        expect(mandate.isUnlimitedSpend).to.be.true;
+        expect(mandate.debitType).to.deep.equal({ variable: {} });
     });
 
-    it("should fail to create mandate with same ID twice", async () => {
-        const args = {
-            amountPerDebit: new anchor.BN(100000),
-            limit: new anchor.BN(1000000),
+    it("rejects duplicate mandate creation with same ID", async () => {
+        const mandateConfig = {
+            amountPerDebit: new anchor.BN(100_000),
+            limit: new anchor.BN(1_000_000),
             isUnlimitedSpend: false,
             debitType: { fixed: {} } as const,
             debitFrequencySeconds: new anchor.BN(60),
         };
 
-        // Create first mandate
-        await testFactory.createMandate(context, args);
+        await testFactory.createMandate(context, mandateConfig);
 
-        // Try to create second mandate with same ID
         try {
-            await testFactory.createMandate(context, args);
+            await testFactory.createMandate(context, mandateConfig);
             expect.fail("Should have thrown error for duplicate mandate ID");
         } catch (error) {
             expect(error.message).to.include("already in use");

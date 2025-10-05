@@ -4,23 +4,22 @@ import { expect } from "chai";
 import { TestFactory, TestContext } from "./test-factory";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
-describe("execute_mandate", () => {
+describe("Fixed Debit Mandate Execution", () => {
     const testFactory = TestFactory.getInstance();
     let context: TestContext;
 
     beforeEach(async () => {
         context = await testFactory.createTestContext();
-        // Create and approve mandate
-        await testFactory.createAndApproveMandate(context, {
+        await testFactory.createApprovedFixedMandate(context, {
             debitFrequencySeconds: new anchor.BN(1), // Short frequency for testing
         });
     });
 
-    it("should execute mandate with correct fixed amount", async () => {
-        const amountToDebit = new anchor.BN(100000); // Should match amountPerDebit
+    it("executes mandate with correct fixed amount", async () => {
+        const DEBIT_AMOUNT = new anchor.BN(100_000); // Matches default amountPerDebit
 
         await context.program.methods
-            .executeMandate({ amountToDebit })
+            .executeMandate({ amountToDebit: DEBIT_AMOUNT })
             .accountsPartial({
                 authority: context.authority.publicKey,
                 mandate: context.mandatePda,
@@ -33,18 +32,17 @@ describe("execute_mandate", () => {
             .signers([context.authority])
             .rpc();
 
-        const mandateAccount = await context.program.account.mandate.fetch(
-            context.mandatePda
-        );
-        expect(mandateAccount.totalDebitedAmount.toString()).to.equal("100000");
+        const mandate = await context.program.account.mandate.fetch(context.mandatePda);
+
+        expect(mandate.totalDebitedAmount.toString()).to.equal("100000");
     });
 
-    it("should fail to execute with wrong fixed amount", async () => {
-        const wrongAmount = new anchor.BN(50000); // Different from amountPerDebit
+    it("rejects execution with incorrect fixed amount", async () => {
+        const INCORRECT_AMOUNT = new anchor.BN(50_000); // Different from amountPerDebit
 
         try {
             await context.program.methods
-                .executeMandate({ amountToDebit: wrongAmount })
+                .executeMandate({ amountToDebit: INCORRECT_AMOUNT })
                 .accountsPartial({
                     authority: context.authority.publicKey,
                     mandate: context.mandatePda,
@@ -57,20 +55,20 @@ describe("execute_mandate", () => {
                 .signers([context.authority])
                 .rpc();
 
-            expect.fail("Should have failed with wrong fixed amount");
+            expect.fail("Should have rejected incorrect fixed amount");
         } catch (error) {
             expect(error.error.errorCode.code).to.equal("InvalidAmountForFixedDebit");
         }
     });
 
-    it("should fail to execute when limit is exceeded", async () => {
-        // Execute multiple times to exceed limit
-        const amountToDebit = new anchor.BN(100000);
+    it("rejects execution when total limit is exceeded", async () => {
+        const DEBIT_AMOUNT = new anchor.BN(100_000);
+        const MAX_EXECUTIONS = 10; // 10 * 100_000 = 1_000_000 (equals limit)
+        const DELAY_BETWEEN_DEBITS_MS = 1500;
 
-        // Execute 10 times (10 * 100000 = 1000000, which equals the limit)
-        for (let i = 0; i < 10; i++) {
+        for (let i = 0; i < MAX_EXECUTIONS; i++) {
             await context.program.methods
-                .executeMandate({ amountToDebit })
+                .executeMandate({ amountToDebit: DEBIT_AMOUNT })
                 .accountsPartial({
                     authority: context.authority.publicKey,
                     mandate: context.mandatePda,
@@ -82,15 +80,13 @@ describe("execute_mandate", () => {
                 })
                 .signers([context.authority])
                 .rpc();
-            
-            // Add delay to avoid time constraint issues
-            await new Promise(resolve => setTimeout(resolve, 1500));
+
+            await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_DEBITS_MS));
         }
 
-        // 11th execution should fail
         try {
             await context.program.methods
-                .executeMandate({ amountToDebit })
+                .executeMandate({ amountToDebit: DEBIT_AMOUNT })
                 .accountsPartial({
                     authority: context.authority.publicKey,
                     mandate: context.mandatePda,
@@ -103,24 +99,24 @@ describe("execute_mandate", () => {
                 .signers([context.authority])
                 .rpc();
 
-            expect.fail("Should have failed when limit exceeded");
+            expect.fail("Should have rejected execution after limit exceeded");
         } catch (error) {
             expect(error.error.errorCode.code).to.equal("DebitLimitExceeded");
         }
     });
 
-    it("should fail if wrong authority tries to execute", async () => {
-        const wrongAuthority = Keypair.generate();
+    it("rejects execution by unauthorized authority", async () => {
+        const unauthorizedAuthority = Keypair.generate();
         await testFactory.airdropAndConfirm(
-            wrongAuthority.publicKey,
+            unauthorizedAuthority.publicKey,
             anchor.web3.LAMPORTS_PER_SOL
         );
 
         try {
             await context.program.methods
-                .executeMandate({ amountToDebit: new anchor.BN(100000) })
+                .executeMandate({ amountToDebit: new anchor.BN(100_000) })
                 .accountsPartial({
-                    authority: wrongAuthority.publicKey,
+                    authority: unauthorizedAuthority.publicKey,
                     mandate: context.mandatePda,
                     mint: context.mint,
                     userTokenAccount: context.userTokenAccount,
@@ -128,38 +124,35 @@ describe("execute_mandate", () => {
                     tokenProgram: TOKEN_PROGRAM_ID,
                     systemProgram: anchor.web3.SystemProgram.programId,
                 })
-                .signers([wrongAuthority])
+                .signers([unauthorizedAuthority])
                 .rpc();
 
-            expect.fail("Should have failed with wrong authority");
+            expect.fail("Should have rejected unauthorized authority");
         } catch (error) {
             expect(error.error.errorCode.code).to.equal("InvalidAuthority");
         }
     });
 });
 
-describe("variable debit mandate", () => {
+describe("Variable Debit Mandate Execution", () => {
     const testFactory = TestFactory.getInstance();
     let context: TestContext;
 
     beforeEach(async () => {
         context = await testFactory.createTestContext();
-        // Create variable debit mandate
-        await testFactory.createAndApproveMandate(context, {
-            amountPerDebit: new anchor.BN(1000000), // Variable amount
-            limit: new anchor.BN(1000000),
-            isUnlimitedSpend: false,
-            debitType: { variable: {} },
+        await testFactory.createApprovedVariableMandate(context, {
+            amountPerDebit: new anchor.BN(1_000_000), // Not enforced for variable
+            limit: new anchor.BN(1_000_000),
             debitFrequencySeconds: new anchor.BN(1),
         });
     });
 
-    it("should execute variable debit with different amounts", async () => {
-        // Execute with different amounts
-        const amounts = [50000, 75000, 125000];
+    it("executes variable debits with different amounts", async () => {
+        const DEBIT_AMOUNTS = [50_000, 75_000, 125_000];
+        const DELAY_BETWEEN_DEBITS_MS = 1500;
         let totalDebited = 0;
 
-        for (const amount of amounts) {
+        for (const amount of DEBIT_AMOUNTS) {
             await context.program.methods
                 .executeMandate({ amountToDebit: new anchor.BN(amount) })
                 .accountsPartial({
@@ -175,20 +168,14 @@ describe("variable debit mandate", () => {
                 .rpc();
 
             totalDebited += amount;
-            
-            // Add delay to avoid time constraint issues
-            await new Promise(resolve => setTimeout(resolve, 1500));
+            await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_DEBITS_MS));
         }
 
-        const mandateAccount = await context.program.account.mandate.fetch(
-            context.mandatePda
-        );
-        expect(mandateAccount.totalDebitedAmount.toString()).to.equal(
-            totalDebited.toString()
-        );
+        const mandate = await context.program.account.mandate.fetch(context.mandatePda);
+        expect(mandate.totalDebitedAmount.toString()).to.equal(totalDebited.toString());
     });
 
-    it("should fail variable debit with zero amount", async () => {
+    it("rejects variable debit with zero amount", async () => {
         try {
             await context.program.methods
                 .executeMandate({ amountToDebit: new anchor.BN(0) })
@@ -204,7 +191,7 @@ describe("variable debit mandate", () => {
                 .signers([context.authority])
                 .rpc();
 
-            expect.fail("Should have failed with zero amount for variable debit");
+            expect.fail("Should have rejected zero amount for variable debit");
         } catch (error) {
             expect(error.error?.errorCode?.code || error.error?.code).to.equal(
                 "InvalidAmountForVariableDebit"

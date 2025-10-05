@@ -14,7 +14,6 @@ use instructions::*;
 
 pub mod events;
 
-#[allow(deprecated)]
 #[program]
 pub mod mandate {
     use super::*;
