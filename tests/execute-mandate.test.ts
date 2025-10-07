@@ -2,7 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Keypair } from "@solana/web3.js";
 import { expect } from "chai";
 import { TestFactory, TestContext } from "./test-factory";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID, revoke } from "@solana/spl-token";
 
 describe("Fixed Debit Mandate Execution", () => {
     const testFactory = TestFactory.getInstance();
@@ -132,6 +132,111 @@ describe("Fixed Debit Mandate Execution", () => {
             expect(error.error.errorCode.code).to.equal("InvalidAuthority");
         }
     });
+
+    it("rejects execution before debit_frequency_seconds has elapsed", async () => {
+        const DEBIT_AMOUNT = new anchor.BN(100_000);
+
+        // First execution should succeed
+        await context.program.methods
+            .executeMandate({ amountToDebit: DEBIT_AMOUNT })
+            .accountsPartial({
+                authority: context.authority.publicKey,
+                mandate: context.mandatePda,
+                mint: context.mint,
+                userTokenAccount: context.userTokenAccount,
+                destinationTokenAccount: context.authorityTokenAccount,
+                tokenProgram: TOKEN_PROGRAM_ID,
+                systemProgram: anchor.web3.SystemProgram.programId,
+            })
+            .signers([context.authority])
+            .rpc();
+
+        // Immediate second execution should fail
+        try {
+            await context.program.methods
+                .executeMandate({ amountToDebit: DEBIT_AMOUNT })
+                .accountsPartial({
+                    authority: context.authority.publicKey,
+                    mandate: context.mandatePda,
+                    mint: context.mint,
+                    userTokenAccount: context.userTokenAccount,
+                    destinationTokenAccount: context.authorityTokenAccount,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    systemProgram: anchor.web3.SystemProgram.programId,
+                })
+                .signers([context.authority])
+                .rpc();
+
+            expect.fail("Should have rejected execution before frequency elapsed");
+        } catch (error) {
+            expect(error.error.errorCode.code).to.equal("InsufficientTimeSinceLastDebit");
+        }
+    });
+
+    it("rejects execution with insufficient token balance", async () => {
+        // Create a new context with minimal token balance
+        const poorUserContext = await testFactory.createTestContext();
+
+        // Create mandate with high debit amount
+        await testFactory.createApprovedFixedMandate(poorUserContext, {
+            amountPerDebit: new anchor.BN(2_000_000), // More than user has (1_000_000)
+            limit: new anchor.BN(10_000_000),
+            debitFrequencySeconds: new anchor.BN(1),
+        });
+
+        try {
+            await poorUserContext.program.methods
+                .executeMandate({ amountToDebit: new anchor.BN(2_000_000) })
+                .accountsPartial({
+                    authority: poorUserContext.authority.publicKey,
+                    mandate: poorUserContext.mandatePda,
+                    mint: poorUserContext.mint,
+                    userTokenAccount: poorUserContext.userTokenAccount,
+                    destinationTokenAccount: poorUserContext.authorityTokenAccount,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    systemProgram: anchor.web3.SystemProgram.programId,
+                })
+                .signers([poorUserContext.authority])
+                .rpc();
+
+            expect.fail("Should have rejected execution with insufficient balance");
+        } catch (error) {
+            expect(error.error.errorCode.code).to.equal("InsufficientBalance");
+        }
+    });
+
+    it("rejects execution when delegate has been revoked", async () => {
+        // Revoke the delegation after approval
+        await revoke(
+            testFactory.getConnection(),
+            context.user,
+            context.userTokenAccount,
+            context.user.publicKey,
+            [],
+            undefined,
+            TOKEN_PROGRAM_ID
+        );
+
+        try {
+            await context.program.methods
+                .executeMandate({ amountToDebit: new anchor.BN(100_000) })
+                .accountsPartial({
+                    authority: context.authority.publicKey,
+                    mandate: context.mandatePda,
+                    mint: context.mint,
+                    userTokenAccount: context.userTokenAccount,
+                    destinationTokenAccount: context.authorityTokenAccount,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    systemProgram: anchor.web3.SystemProgram.programId,
+                })
+                .signers([context.authority])
+                .rpc();
+
+            expect.fail("Should have rejected execution with revoked delegate");
+        } catch (error) {
+            expect(error.error.errorCode.code).to.equal("InvalidDelegate");
+        }
+    });
 });
 
 describe("Variable Debit Mandate Execution", () => {
@@ -196,6 +301,38 @@ describe("Variable Debit Mandate Execution", () => {
             expect(error.error?.errorCode?.code || error.error?.code).to.equal(
                 "InvalidAmountForVariableDebit"
             );
+        }
+    });
+
+    it("rejects variable debit exceeding amount_per_debit", async () => {
+        // Create context with higher limit to avoid DebitLimitExceeded error
+        const highLimitContext = await testFactory.createTestContext();
+        await testFactory.createApprovedVariableMandate(highLimitContext, {
+            amountPerDebit: new anchor.BN(1_000_000), // Max per debit: 1 token
+            limit: new anchor.BN(10_000_000), // Total limit: 10 tokens (high enough)
+            debitFrequencySeconds: new anchor.BN(1),
+        });
+
+        const EXCESSIVE_AMOUNT = new anchor.BN(1_500_000); // 1.5 tokens (exceeds amount_per_debit)
+
+        try {
+            await highLimitContext.program.methods
+                .executeMandate({ amountToDebit: EXCESSIVE_AMOUNT })
+                .accountsPartial({
+                    authority: highLimitContext.authority.publicKey,
+                    mandate: highLimitContext.mandatePda,
+                    mint: highLimitContext.mint,
+                    userTokenAccount: highLimitContext.userTokenAccount,
+                    destinationTokenAccount: highLimitContext.authorityTokenAccount,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    systemProgram: anchor.web3.SystemProgram.programId,
+                })
+                .signers([highLimitContext.authority])
+                .rpc();
+
+            expect.fail("Should have rejected variable debit exceeding amount_per_debit");
+        } catch (error) {
+            expect(error.error.errorCode.code).to.equal("InvalidAmountForVariableDebit");
         }
     });
 });

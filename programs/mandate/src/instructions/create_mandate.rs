@@ -59,6 +59,10 @@ impl<'info> CreateMandate<'info> {
     ) -> Result<()> {
         // Validate inputs
         require!(args.amount_per_debit > 0, MandateError::InvalidAmount);
+        require!(
+            args.debit_frequency_seconds > 0,
+            MandateError::InvalidDebitFrequency
+        );
         if !args.is_unlimited_spend {
             require!(
                 args.limit >= args.amount_per_debit,

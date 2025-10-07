@@ -75,4 +75,34 @@ describe("Mandate Creation", () => {
             expect(error.message).to.include("already in use");
         }
     });
+
+    it("rejects mandate creation with zero amount_per_debit", async () => {
+        try {
+            await testFactory.createMandate(context, {
+                amountPerDebit: new anchor.BN(0),
+                limit: new anchor.BN(1_000_000),
+                isUnlimitedSpend: false,
+                debitType: { fixed: {} },
+                debitFrequencySeconds: new anchor.BN(60),
+            });
+            expect.fail("Should have thrown error for zero amount_per_debit");
+        } catch (error) {
+            expect(error.error.errorCode.code).to.equal("InvalidAmount");
+        }
+    });
+
+    it("rejects mandate creation with zero debit_frequency_seconds", async () => {
+        try {
+            await testFactory.createMandate(context, {
+                amountPerDebit: new anchor.BN(100_000),
+                limit: new anchor.BN(1_000_000),
+                isUnlimitedSpend: false,
+                debitType: { fixed: {} },
+                debitFrequencySeconds: new anchor.BN(0),
+            });
+            expect.fail("Should have thrown error for zero debit_frequency_seconds");
+        } catch (error) {
+            expect(error.error.errorCode.code).to.equal("InvalidDebitFrequency");
+        }
+    });
 });

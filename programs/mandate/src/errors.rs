@@ -34,6 +34,8 @@ pub enum MandateError {
     InvalidAmount,
     #[msg("Invalid spend cap")]
     InvalidSpendCap,
+    #[msg("Invalid debit frequency")]
+    InvalidDebitFrequency,
     #[msg("Insufficient time since last debit")]
     InsufficientTimeSinceLastDebit,
 
