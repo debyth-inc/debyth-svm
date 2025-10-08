@@ -39,6 +39,19 @@ impl<'info> ModifyMandate<'info> {
         // Ensure mandate is approved before allowing modifications
         require!(self.mandate.is_approved, MandateError::MandateNotApproved);
 
+        // Validate new values
+        require!(
+            args.new_amount_per_debit > 0,
+            MandateError::InvalidAmount
+        );
+
+        if !args.new_is_unlimited_spend {
+            require!(
+                args.new_limit >= args.new_amount_per_debit,
+                MandateError::InvalidSpendCap
+            );
+        }
+
         // Update mandate fields
         self.mandate.amount_per_debit = args.new_amount_per_debit;
         self.mandate.debit_type = args.new_debit_type;

@@ -71,6 +71,81 @@ describe("Mandate Modification", () => {
             expect(error.error.errorCode.code).to.equal("InvalidAuthority");
         }
     });
+
+    it("rejects modification of unapproved mandate", async () => {
+        const unapprovedContext = await testFactory.createTestContext();
+        await testFactory.createMandate(unapprovedContext);
+
+        try {
+            await unapprovedContext.program.methods
+                .modifyMandate({
+                    newAmountPerDebit: new anchor.BN(200_000),
+                    newLimit: new anchor.BN(2_000_000),
+                    newIsUnlimitedSpend: false,
+                    newDebitType: { fixed: {} },
+                })
+                .accountsPartial({
+                    authority: unapprovedContext.authority.publicKey,
+                    mandate: unapprovedContext.mandatePda,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    systemProgram: anchor.web3.SystemProgram.programId,
+                })
+                .signers([unapprovedContext.authority])
+                .rpc();
+
+            expect.fail("Should have rejected modification of unapproved mandate");
+        } catch (error) {
+            expect(error.error.errorCode.code).to.equal("MandateNotApproved");
+        }
+    });
+
+    it("rejects modification with zero amount_per_debit", async () => {
+        try {
+            await context.program.methods
+                .modifyMandate({
+                    newAmountPerDebit: new anchor.BN(0),
+                    newLimit: new anchor.BN(1_000_000),
+                    newIsUnlimitedSpend: false,
+                    newDebitType: { fixed: {} },
+                })
+                .accountsPartial({
+                    authority: context.authority.publicKey,
+                    mandate: context.mandatePda,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    systemProgram: anchor.web3.SystemProgram.programId,
+                })
+                .signers([context.authority])
+                .rpc();
+
+            expect.fail("Should have rejected zero amount_per_debit");
+        } catch (error) {
+            expect(error.error.errorCode.code).to.equal("InvalidAmount");
+        }
+    });
+
+    it("rejects modification with limit less than amount_per_debit", async () => {
+        try {
+            await context.program.methods
+                .modifyMandate({
+                    newAmountPerDebit: new anchor.BN(1_000_000),
+                    newLimit: new anchor.BN(500_000), // Less than amount_per_debit
+                    newIsUnlimitedSpend: false,
+                    newDebitType: { fixed: {} },
+                })
+                .accountsPartial({
+                    authority: context.authority.publicKey,
+                    mandate: context.mandatePda,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    systemProgram: anchor.web3.SystemProgram.programId,
+                })
+                .signers([context.authority])
+                .rpc();
+
+            expect.fail("Should have rejected limit less than amount_per_debit");
+        } catch (error) {
+            expect(error.error.errorCode.code).to.equal("InvalidSpendCap");
+        }
+    });
 });
 
 describe("Mandate Cancellation", () => {

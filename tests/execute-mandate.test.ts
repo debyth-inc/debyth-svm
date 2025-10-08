@@ -237,6 +237,59 @@ describe("Fixed Debit Mandate Execution", () => {
             expect(error.error.errorCode.code).to.equal("InvalidDelegate");
         }
     });
+
+    it("allows execution at exact limit boundary", async () => {
+        const exactLimitContext = await testFactory.createTestContext();
+        await testFactory.createApprovedFixedMandate(exactLimitContext, {
+            amountPerDebit: new anchor.BN(100_000),
+            limit: new anchor.BN(100_000), // Exact same as amount
+            debitFrequencySeconds: new anchor.BN(1),
+        });
+
+        // Should succeed - exactly at limit
+        await exactLimitContext.program.methods
+            .executeMandate({ amountToDebit: new anchor.BN(100_000) })
+            .accountsPartial({
+                authority: exactLimitContext.authority.publicKey,
+                mandate: exactLimitContext.mandatePda,
+                mint: exactLimitContext.mint,
+                userTokenAccount: exactLimitContext.userTokenAccount,
+                destinationTokenAccount: exactLimitContext.authorityTokenAccount,
+                tokenProgram: TOKEN_PROGRAM_ID,
+                systemProgram: anchor.web3.SystemProgram.programId,
+            })
+            .signers([exactLimitContext.authority])
+            .rpc();
+
+        const mandate = await exactLimitContext.program.account.mandate.fetch(
+            exactLimitContext.mandatePda
+        );
+        expect(mandate.totalDebitedAmount.toString()).to.equal("100000");
+        expect(mandate.limit.toString()).to.equal("100000");
+
+        // Second execution should fail - now over limit
+        await new Promise(resolve => setTimeout(resolve, 1500));
+
+        try {
+            await exactLimitContext.program.methods
+                .executeMandate({ amountToDebit: new anchor.BN(100_000) })
+                .accountsPartial({
+                    authority: exactLimitContext.authority.publicKey,
+                    mandate: exactLimitContext.mandatePda,
+                    mint: exactLimitContext.mint,
+                    userTokenAccount: exactLimitContext.userTokenAccount,
+                    destinationTokenAccount: exactLimitContext.authorityTokenAccount,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    systemProgram: anchor.web3.SystemProgram.programId,
+                })
+                .signers([exactLimitContext.authority])
+                .rpc();
+
+            expect.fail("Should have rejected execution over limit");
+        } catch (error) {
+            expect(error.error.errorCode.code).to.equal("DebitLimitExceeded");
+        }
+    });
 });
 
 describe("Variable Debit Mandate Execution", () => {
