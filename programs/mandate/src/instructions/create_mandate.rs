@@ -4,21 +4,24 @@ use anchor_spl::{
     token::{Mint, Token, TokenAccount},
 };
 
-use crate::state::state::{DebitType, Mandate};
+use crate::events::MandateCreatedEvent;
+use crate::state::{DebitType, Mandate, UNLIMITED_ALLOWANCE};
+
+use crate::errors::MandateError;
 
 #[derive(Accounts)]
 #[instruction(mandate_id: u64)]
 pub struct CreateMandate<'info> {
     #[account(mut)]
-    pub user: Signer<'info>,
+    pub authority: Signer<'info>,
 
-    pub authority: SystemAccount<'info>,
+    pub user: SystemAccount<'info>,
 
     #[account(
         init,
-        payer = user,
+        payer = authority,
         space = 8 + Mandate::INIT_SPACE,
-        seeds = [b"mandate", mandate_id.to_le_bytes().as_ref()],
+        seeds = [b"mandate", authority.key().as_ref(), mandate_id.to_le_bytes().as_ref()],
         bump,
     )]
     pub mandate: Box<Account<'info, Mandate>>,
@@ -33,14 +36,6 @@ pub struct CreateMandate<'info> {
     )]
     pub user_token_account: Box<Account<'info, TokenAccount>>,
 
-    #[account(
-        mut,
-        associated_token::mint = mint,
-        associated_token::authority = authority,
-        associated_token::token_program = token_program,
-    )]
-    pub authority_token_account: Box<Account<'info, TokenAccount>>,
-
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
@@ -48,8 +43,11 @@ pub struct CreateMandate<'info> {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct CreateMandateArgs {
-    pub amount: u64,
+    pub amount_per_debit: u64,
+    pub limit: u64,
+    pub is_unlimited_spend: bool,
     pub debit_type: DebitType,
+    pub debit_frequency_seconds: u64,
 }
 
 impl<'info> CreateMandate<'info> {
@@ -59,10 +57,18 @@ impl<'info> CreateMandate<'info> {
         args: CreateMandateArgs,
         bumps: &CreateMandateBumps,
     ) -> Result<()> {
-        let now = Clock::get()?.unix_timestamp;
-
         // Validate inputs
-        require!(args.amount > 0, MandateError::InvalidAmount);
+        require!(args.amount_per_debit > 0, MandateError::InvalidAmount);
+        require!(
+            args.debit_frequency_seconds > 0,
+            MandateError::InvalidDebitFrequency
+        );
+        if !args.is_unlimited_spend {
+            require!(
+                args.limit >= args.amount_per_debit,
+                MandateError::InvalidSpendCap
+            );
+        }
 
         require!(
             self.user_token_account.mint == self.mint.key(),
@@ -73,6 +79,12 @@ impl<'info> CreateMandate<'info> {
             MandateError::TokenAlreadyDelegated
         );
 
+        let actual_limit = if args.is_unlimited_spend {
+            UNLIMITED_ALLOWANCE
+        } else {
+            args.limit
+        };
+
         // Initialize the mandate
         self.mandate.set_inner(Mandate {
             id: mandate_id,
@@ -80,31 +92,34 @@ impl<'info> CreateMandate<'info> {
             user: self.user.key(),
             bump: bumps.mandate,
             mint: self.mint.key(),
-            amount: args.amount,
+            amount_per_debit: args.amount_per_debit,
+            limit: actual_limit,
+            total_debited_amount: 0,
             debit_type: args.debit_type,
+            is_unlimited_spend: args.is_unlimited_spend,
             is_approved: false,
             is_active: false,
-            last_execution: now,
+            last_debit_date: 0,
+            debit_frequency_seconds: args.debit_frequency_seconds,
+            created_at: Clock::get()?.unix_timestamp,
+            updated_at: Clock::get()?.unix_timestamp,
+        });
+
+        emit!(MandateCreatedEvent {
+            mandate_id: mandate_id,
+            user: self.user.key(),
+            mint: self.mint.key(),
+            is_approved: false,
+            is_active: false,
+            created_at: Clock::get()?.unix_timestamp,
+            amount_per_debit: args.amount_per_debit,
+            limit: actual_limit,
+            is_unlimited_spend: args.is_unlimited_spend,
+            debit_type: args.debit_type,
+            debit_frequency_seconds: args.debit_frequency_seconds,
+            timestamp: Clock::get()?.unix_timestamp,
         });
 
         Ok(())
     }
-}
-
-#[error_code]
-pub enum MandateError {
-    #[msg("Mandate is already approved or active")]
-    AlreadyApproved,
-    #[msg("Mandate has expired")]
-    Expired,
-    #[msg("Invalid dates provided")]
-    InvalidDates,
-    #[msg("Invalid amount")]
-    InvalidAmount,
-    #[msg("Invalid token account")]
-    InvalidTokenAccount,
-    #[msg("Invalid mint")]
-    InvalidMint,
-    #[msg("Token account is already delegated")]
-    TokenAlreadyDelegated,
 }

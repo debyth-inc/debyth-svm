@@ -4,7 +4,8 @@ use anchor_spl::{
     token::{approve, Approve, Mint, Token, TokenAccount},
 };
 
-use crate::state::state::Mandate;
+use crate::errors::MandateError;
+use crate::state::state::{Mandate, UNLIMITED_ALLOWANCE};
 
 #[derive(Accounts)]
 #[instruction(mandate_id: u64)]
@@ -13,14 +14,13 @@ pub struct ApproveMandate<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
-    // Authority is solely used for mandate validation and signing the delegate CPI.
-    // It is NOT marked as payer so that the user covers the fees.
-    pub authority: SystemAccount<'info>,
-
+    // // Authority is solely used for mandate validation and signing the delegate CPI.
+    // // It is NOT marked as payer so that the user covers the fees.
+    // pub authority: SystemAccount<'info>,
     /// The new mandate account to be created
     #[account(
         mut,
-        seeds = [b"mandate", mandate_id.to_le_bytes().as_ref()],
+        seeds = [b"mandate", mandate.authority.key().as_ref(), mandate_id.to_le_bytes().as_ref()],
         bump = mandate.bump,
     )]
     pub mandate: Account<'info, Mandate>,
@@ -46,13 +46,15 @@ pub struct ApproveMandate<'info> {
 
 impl<'info> ApproveMandate<'info> {
     pub fn approve(&mut self) -> Result<()> {
-        let now = Clock::get()?.unix_timestamp;
-
-        // Validate mandate state
+        // Validate that the user actually matches the mandate user
         require!(
-            !self.mandate.is_active && !self.mandate.is_approved,
-            MandateError::AlreadyApproved
+            self.user.key() == self.mandate.user,
+            MandateError::UnauthorizedUser
         );
+        // Validate mandate state
+        // Fail early with clear errors for the two distinct states.
+        require!(!self.mandate.is_approved, MandateError::AlreadyApproved);
+        require!(!self.mandate.is_active, MandateError::AlreadyActive);
 
         // Validate token account
         require!(
@@ -68,6 +70,11 @@ impl<'info> ApproveMandate<'info> {
             MandateError::TokenAlreadyDelegated
         );
 
+        // SECURITY FIX 1: Update the state BEFORE external call
+        self.mandate.is_approved = true;
+        self.mandate.is_active = true;
+        self.mandate.updated_at = Clock::get()?.unix_timestamp;
+
         // Approve token delegation
         let cpi_program = self.token_program.to_account_info();
         let cpi_accounts = Approve {
@@ -76,29 +83,24 @@ impl<'info> ApproveMandate<'info> {
             delegate: self.mandate.to_account_info(),
         };
 
-        // Since we don't have frequency, start_date, and end_date in the Mandate struct,
-        // we'll just use the base amount
-        let amount = self.mandate.amount;
-
+        let amount = if self.mandate.is_unlimited_spend {
+            UNLIMITED_ALLOWANCE
+        } else {
+            self.mandate.limit
+        };
         approve(CpiContext::new(cpi_program, cpi_accounts), amount)?;
 
-        // Update mandate state
-        self.mandate.is_approved = true;
-        self.mandate.is_active = true;
-        self.mandate.last_execution = now;
+        // SECURITY FIX 7: Emit approval event for monitoring
+        emit!(crate::events::MandateApprovedEvent {
+            mandate_id: self.mandate.id,
+            user: self.user.key(),
+            amount_per_debit: self.mandate.amount_per_debit,
+            is_approved: self.mandate.is_approved,
+            is_active: self.mandate.is_active,
+            created_at: self.mandate.created_at,
+            timestamp: self.mandate.updated_at,
+        });
 
         Ok(())
     }
-}
-
-#[error_code]
-pub enum MandateError {
-    #[msg("Mandate is already approved or active")]
-    AlreadyApproved,
-    #[msg("Invalid token account")]
-    InvalidTokenAccount,
-    #[msg("Invalid mint")]
-    InvalidMint,
-    #[msg("Token account is already delegated")]
-    TokenAlreadyDelegated,
 }

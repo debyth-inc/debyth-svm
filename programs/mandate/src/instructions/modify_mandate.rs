@@ -1,7 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::Token;
 
-use crate::state::state::Mandate;
+use crate::errors::MandateError;
+use crate::events::MandateModifiedEvent;
+use crate::state::{DebitType, Mandate, UNLIMITED_ALLOWANCE};
 
 #[derive(Accounts)]
 pub struct ModifyMandate<'info> {
@@ -10,9 +12,9 @@ pub struct ModifyMandate<'info> {
 
     #[account(
         mut,
-        seeds = [b"mandate", mandate.id.to_le_bytes().as_ref()],
+        seeds = [b"mandate", authority.key().as_ref(), mandate.id.to_le_bytes().as_ref()],
         bump = mandate.bump,
-        constraint = mandate.authority == authority.key() @ ManageError::InvalidAuthority,
+        constraint = mandate.authority == authority.key() @ MandateError::InvalidAuthority,
     )]
     pub mandate: Account<'info, Mandate>,
 
@@ -20,41 +22,76 @@ pub struct ModifyMandate<'info> {
     pub system_program: Program<'info, System>,
 }
 
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct ModifyMandateArgs {
+    pub new_amount_per_debit: u64,
+    pub new_limit: u64,
+    pub new_is_unlimited_spend: bool,
+    pub new_debit_type: DebitType,
+    pub new_debit_frequency_seconds: u64,
+}
+
 impl<'info> ModifyMandate<'info> {
     /// Toggles the mandate's active state.
     ///
     /// This method flips the state from active to inactive and vice versa.
     /// It requires the mandate to be approved before modification.
-    pub fn modify(&mut self) -> Result<()> {
+    pub fn modify(&mut self, args: ModifyMandateArgs) -> Result<()> {
         // Ensure mandate is approved before allowing modifications
-        require!(self.mandate.is_approved, ManageError::MandateNotApproved);
+        require!(self.mandate.is_approved, MandateError::MandateNotApproved);
 
-        // Toggle the active state
-        self.mandate.is_active = !self.mandate.is_active;
+        // Validate new values
+        require!(
+            args.new_amount_per_debit > 0,
+            MandateError::InvalidAmount
+        );
+        require!(
+            args.new_debit_frequency_seconds > 0,
+            MandateError::InvalidDebitFrequency
+        );
 
-        // Update last execution timestamp
-        self.mandate.last_execution = Clock::get()?.unix_timestamp;
+        if !args.new_is_unlimited_spend {
+            require!(
+                args.new_limit >= args.new_amount_per_debit,
+                MandateError::InvalidSpendCap
+            );
+            // SECURITY: Ensure new limit is not less than already debited amount
+            require!(
+                args.new_limit >= self.mandate.total_debited_amount,
+                MandateError::InvalidSpendCap
+            );
+        }
+
+        // Update mandate fields
+        self.mandate.amount_per_debit = args.new_amount_per_debit;
+        self.mandate.debit_type = args.new_debit_type;
+        self.mandate.is_unlimited_spend = args.new_is_unlimited_spend;
+        self.mandate.debit_frequency_seconds = args.new_debit_frequency_seconds;
+
+        let actual_new_limit = if args.new_is_unlimited_spend {
+            UNLIMITED_ALLOWANCE
+        } else {
+            args.new_limit
+        };
+        self.mandate.limit = actual_new_limit;
+
+        let now = Clock::get()?.unix_timestamp;
+        self.mandate.updated_at = now;
 
         // Emit an event to signify the change
-        emit!(MandateModified {
+        emit!(MandateModifiedEvent {
             mandate_id: self.mandate.id,
-            new_status: self.mandate.is_active,
+            authority: self.authority.key(),
+            user: self.mandate.user,
+            new_amount_per_debit: args.new_amount_per_debit,
+            new_limit: actual_new_limit,
+            new_is_unlimited_spend: args.new_is_unlimited_spend,
+            new_debit_type: args.new_debit_type,
+            new_is_active: self.mandate.is_active,
+            new_is_approved: self.mandate.is_approved,
+            timestamp: now,
         });
 
         Ok(())
     }
-}
-
-#[event]
-pub struct MandateModified {
-    pub mandate_id: u64,
-    pub new_status: bool,
-}
-
-#[error_code]
-pub enum ManageError {
-    #[msg("Invalid authority")]
-    InvalidAuthority,
-    #[msg("Mandate is not approved")]
-    MandateNotApproved,
 }

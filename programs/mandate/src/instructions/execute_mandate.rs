@@ -1,9 +1,9 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{
-    transfer_checked, Mint, Token, TokenAccount, TransferChecked,
-};
+use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked};
 
-use crate::state::state::{DebitType, Mandate};
+use crate::errors::MandateError;
+use crate::events::MandateExecutedEvent;
+use crate::state::{DebitType, Mandate};
 
 #[derive(Accounts)]
 pub struct ExecuteMandate<'info> {
@@ -11,7 +11,7 @@ pub struct ExecuteMandate<'info> {
 
     #[account(
         mut,
-        seeds = [b"mandate", mandate.id.to_le_bytes().as_ref()],
+        seeds = [b"mandate", authority.key().as_ref(), mandate.id.to_le_bytes().as_ref()],
         bump = mandate.bump,
         constraint = mandate.authority == authority.key() @ MandateError::InvalidAuthority,
         constraint = mandate.is_active @ MandateError::MandateNotActive,
@@ -33,7 +33,7 @@ pub struct ExecuteMandate<'info> {
     pub user_token_account: Account<'info, TokenAccount>,
 
     #[account(
-        mut, 
+        mut,
         associated_token::mint = mint,
         associated_token::authority = mandate.authority,
         associated_token::token_program = token_program,
@@ -46,32 +46,73 @@ pub struct ExecuteMandate<'info> {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct ExecuteMandateArgs {
-    pub amount: u64,
+    pub amount_to_debit: u64,
 }
 
 impl<'info> ExecuteMandate<'info> {
     pub fn execute(&mut self, args: ExecuteMandateArgs) -> Result<()> {
-        let now = Clock::get()?.unix_timestamp;
-        
         // Basic mandate validation
         require!(self.mandate.is_active, MandateError::MandateNotActive);
         require!(self.mandate.is_approved, MandateError::MandateNotApproved);
+
+        // Check debit frequency (skip check for first execution when last_debit_date is 0)
+        let now = Clock::get()?.unix_timestamp;
+        if self.mandate.last_debit_date != 0 {
+            // SECURITY: Use checked arithmetic to prevent overflow
+            let time_threshold = self
+                .mandate
+                .last_debit_date
+                .checked_add(self.mandate.debit_frequency_seconds as i64)
+                .ok_or(ProgramError::ArithmeticOverflow)?;
+            require!(
+                time_threshold <= now,
+                MandateError::InsufficientTimeSinceLastDebit
+            );
+        }
+
+        // SECURITY FIX 3: Use checked arithmetic for limit check EARLY
+        let new_total = self
+            .mandate
+            .total_debited_amount
+            .checked_add(args.amount_to_debit)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+
+        require!(
+            new_total <= self.mandate.limit,
+            MandateError::DebitLimitExceeded
+        );
 
         // Amount validation based on debit type
         match self.mandate.debit_type {
             DebitType::Fixed => {
                 require!(
-                    self.mandate.amount == args.amount,
+                    self.mandate.amount_per_debit == args.amount_to_debit,
                     MandateError::InvalidAmountForFixedDebit
                 );
-            },
+            }
             DebitType::Variable => {
                 require!(
-                    args.amount <= self.mandate.amount,
+                    args.amount_to_debit > 0,
+                    MandateError::InvalidAmountForVariableDebit
+                );
+                require!(
+                    args.amount_to_debit <= self.mandate.amount_per_debit,
                     MandateError::InvalidAmountForVariableDebit
                 );
             }
         }
+
+        // SECURITY FIX 5: Check if the user has sufficient balance
+        require!(
+            self.user_token_account.amount >= args.amount_to_debit,
+            MandateError::InsufficientBalance
+        );
+
+        // SECURITY FIX 2: Validate that the delegate is still active
+        require!(
+            self.user_token_account.delegate == Some(self.mandate.key()).into(),
+            MandateError::InvalidDelegate
+        );
 
         // Token account validation
         require!(
@@ -84,9 +125,10 @@ impl<'info> ExecuteMandate<'info> {
         );
 
         // Execute the transfer
-       let cpi_program = self.token_program.to_account_info();
+        let cpi_program = self.token_program.to_account_info();
         let seeds: &[&[u8]] = &[
             b"mandate",
+            self.mandate.authority.as_ref(),
             &self.mandate.id.to_le_bytes(),
             &[self.mandate.bump],
         ];
@@ -103,32 +145,24 @@ impl<'info> ExecuteMandate<'info> {
                 },
                 signer,
             ),
-            args.amount,
+            args.amount_to_debit,
             self.mint.decimals,
         )?;
 
-        // Update last execution
-        self.mandate.last_execution = now;
+        // Update last execution and total debited amount (using the checked value)
+        self.mandate.updated_at = now;
+        self.mandate.last_debit_date = now;
+        self.mandate.total_debited_amount = new_total; // Safe assignment
+
+        emit!(MandateExecutedEvent {
+            mandate_id: self.mandate.id,
+            authority: self.authority.key(),
+            user: self.mandate.user,
+            amount_per_debit: self.mandate.amount_per_debit,
+            total_debited_amount: self.mandate.total_debited_amount,
+            timestamp: now,
+        });
 
         Ok(())
     }
-
-}
-
-#[error_code]
-pub enum MandateError {
-    #[msg("Mandate is not active")]
-    MandateNotActive,
-    #[msg("Mandate is not approved")]
-    MandateNotApproved,
-    #[msg("Invalid authority")]
-    InvalidAuthority,
-    #[msg("Invalid mint account")]
-    InvalidMint,
-    #[msg("Invalid token account")]
-    InvalidTokenAccount,
-    #[msg("Invalid amount for fixed debit")]
-    InvalidAmountForFixedDebit,
-    #[msg("Invalid amount for variable debit")]
-    InvalidAmountForVariableDebit,
 }
