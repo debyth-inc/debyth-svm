@@ -14,16 +14,14 @@
         "test:create": "anchor test tests/create-mandate.test.ts",
         "test:approve": "anchor test tests/approve-mandate.test.ts",
         "test:execute": "anchor test tests/execute-mandate.test.ts",
-        "test:modify-cancel": "anchor test tests/modify-cancel-mandate.test.ts"
+        "test:modify-cancel": "anchor test tests/modify-cancel-mandate.test.ts",
+        "test:security": "anchor test tests/security-edge-cases.test.ts"
     },
     "dependencies": {
         "@coral-xyz/anchor": "0.31.1",
         "@solana/spl-token": "0.3.8",
         "@solana/web3.js": "1.78.8",
-        "rpc-websockets": "7.5.1",
-        "next": "^14.2.0",
-        "react": "^18.3.0",
-        "react-dom": "^18.3.0"
+        "rpc-websockets": "7.5.1"
     },
     "devDependencies": {
         "@types/bn.js": "^5.1.0",
