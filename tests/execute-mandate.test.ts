@@ -129,7 +129,8 @@ describe("Fixed Debit Mandate Execution", () => {
 
             expect.fail("Should have rejected unauthorized authority");
         } catch (error) {
-            expect(error.error.errorCode.code).to.equal("InvalidAuthority");
+            // PDA seeds constraint fails first (seeds include authority)
+            expect(error.error.errorCode.code).to.equal("ConstraintSeeds");
         }
     });
 

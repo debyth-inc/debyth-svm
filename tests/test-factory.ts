@@ -73,10 +73,36 @@ export class TestFactory {
     }
 
     /**
+     * Creates a token account for a given mint and owner
+     */
+    public async createTokenAccount(
+        mint: PublicKey,
+        owner: PublicKey
+    ): Promise<PublicKey> {
+        const ownerKeypair = Keypair.generate();
+        await this.airdropAndConfirm(ownerKeypair.publicKey, anchor.web3.LAMPORTS_PER_SOL);
+
+        const tokenAccount = await getOrCreateAssociatedTokenAccount(
+            this.connection,
+            ownerKeypair,
+            mint,
+            owner,
+            false,
+            undefined,
+            undefined,
+            TOKEN_PROGRAM_ID
+        );
+
+        return tokenAccount.address;
+    }
+
+    /**
      * Creates a fresh test context with new accounts and initial token balances
      * Each context is isolated to prevent test interference
+     *
+     * @param withFreezeAuthority - If true, sets the mint's freeze authority to the authority keypair
      */
-    public async createTestContext(): Promise<TestContext> {
+    public async createTestContext(withFreezeAuthority: boolean = false): Promise<TestContext> {
         const authority = Keypair.generate();
         const user = Keypair.generate();
         const mandateId = new anchor.BN(Math.floor(Math.random() * 1000000));
@@ -90,7 +116,7 @@ export class TestFactory {
             this.connection,
             authority,
             authority.publicKey,
-            null,
+            withFreezeAuthority ? authority.publicKey : null,
             DECIMALS
         );
 
@@ -127,7 +153,7 @@ export class TestFactory {
         );
 
         const [mandatePda] = PublicKey.findProgramAddressSync(
-            [Buffer.from("mandate"), mandateId.toArrayLike(Buffer, "le", 8)],
+            [Buffer.from("mandate"), authority.publicKey.toBuffer(), mandateId.toArrayLike(Buffer, "le", 8)],
             this.program.programId
         );
 

@@ -12,7 +12,7 @@ pub struct ModifyMandate<'info> {
 
     #[account(
         mut,
-        seeds = [b"mandate", mandate.id.to_le_bytes().as_ref()],
+        seeds = [b"mandate", authority.key().as_ref(), mandate.id.to_le_bytes().as_ref()],
         bump = mandate.bump,
         constraint = mandate.authority == authority.key() @ MandateError::InvalidAuthority,
     )]
@@ -28,6 +28,7 @@ pub struct ModifyMandateArgs {
     pub new_limit: u64,
     pub new_is_unlimited_spend: bool,
     pub new_debit_type: DebitType,
+    pub new_debit_frequency_seconds: u64,
 }
 
 impl<'info> ModifyMandate<'info> {
@@ -44,10 +45,19 @@ impl<'info> ModifyMandate<'info> {
             args.new_amount_per_debit > 0,
             MandateError::InvalidAmount
         );
+        require!(
+            args.new_debit_frequency_seconds > 0,
+            MandateError::InvalidDebitFrequency
+        );
 
         if !args.new_is_unlimited_spend {
             require!(
                 args.new_limit >= args.new_amount_per_debit,
+                MandateError::InvalidSpendCap
+            );
+            // SECURITY: Ensure new limit is not less than already debited amount
+            require!(
+                args.new_limit >= self.mandate.total_debited_amount,
                 MandateError::InvalidSpendCap
             );
         }
@@ -56,6 +66,7 @@ impl<'info> ModifyMandate<'info> {
         self.mandate.amount_per_debit = args.new_amount_per_debit;
         self.mandate.debit_type = args.new_debit_type;
         self.mandate.is_unlimited_spend = args.new_is_unlimited_spend;
+        self.mandate.debit_frequency_seconds = args.new_debit_frequency_seconds;
 
         let actual_new_limit = if args.new_is_unlimited_spend {
             UNLIMITED_ALLOWANCE
@@ -64,10 +75,7 @@ impl<'info> ModifyMandate<'info> {
         };
         self.mandate.limit = actual_new_limit;
 
-        // Toggle the active state (optional, depending on intended modification)
-        // self.mandate.is_active = !self.mandate.is_active;
         let now = Clock::get()?.unix_timestamp;
-
         self.mandate.updated_at = now;
 
         // Emit an event to signify the change

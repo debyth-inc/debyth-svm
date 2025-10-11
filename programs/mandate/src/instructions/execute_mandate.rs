@@ -11,7 +11,7 @@ pub struct ExecuteMandate<'info> {
 
     #[account(
         mut,
-        seeds = [b"mandate", mandate.id.to_le_bytes().as_ref()],
+        seeds = [b"mandate", authority.key().as_ref(), mandate.id.to_le_bytes().as_ref()],
         bump = mandate.bump,
         constraint = mandate.authority == authority.key() @ MandateError::InvalidAuthority,
         constraint = mandate.is_active @ MandateError::MandateNotActive,
@@ -55,12 +55,20 @@ impl<'info> ExecuteMandate<'info> {
         require!(self.mandate.is_active, MandateError::MandateNotActive);
         require!(self.mandate.is_approved, MandateError::MandateNotApproved);
 
-        // Check debit frequency FIRST (before other validations)
+        // Check debit frequency (skip check for first execution when last_debit_date is 0)
         let now = Clock::get()?.unix_timestamp;
-        require!(
-            self.mandate.last_debit_date + self.mandate.debit_frequency_seconds as i64 <= now,
-            MandateError::InsufficientTimeSinceLastDebit
-        );
+        if self.mandate.last_debit_date != 0 {
+            // SECURITY: Use checked arithmetic to prevent overflow
+            let time_threshold = self
+                .mandate
+                .last_debit_date
+                .checked_add(self.mandate.debit_frequency_seconds as i64)
+                .ok_or(ProgramError::ArithmeticOverflow)?;
+            require!(
+                time_threshold <= now,
+                MandateError::InsufficientTimeSinceLastDebit
+            );
+        }
 
         // SECURITY FIX 3: Use checked arithmetic for limit check EARLY
         let new_total = self
@@ -120,6 +128,7 @@ impl<'info> ExecuteMandate<'info> {
         let cpi_program = self.token_program.to_account_info();
         let seeds: &[&[u8]] = &[
             b"mandate",
+            self.mandate.authority.as_ref(),
             &self.mandate.id.to_le_bytes(),
             &[self.mandate.bump],
         ];

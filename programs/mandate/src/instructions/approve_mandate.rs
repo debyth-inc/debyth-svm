@@ -20,7 +20,7 @@ pub struct ApproveMandate<'info> {
     /// The new mandate account to be created
     #[account(
         mut,
-        seeds = [b"mandate", mandate_id.to_le_bytes().as_ref()],
+        seeds = [b"mandate", mandate.authority.key().as_ref(), mandate_id.to_le_bytes().as_ref()],
         bump = mandate.bump,
     )]
     pub mandate: Account<'info, Mandate>,

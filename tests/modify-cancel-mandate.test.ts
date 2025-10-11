@@ -24,6 +24,7 @@ describe("Mandate Modification", () => {
                 newLimit: NEW_LIMIT,
                 newIsUnlimitedSpend: true,
                 newDebitType: { variable: {} },
+                newDebitFrequencySeconds: new anchor.BN(60),
             })
             .accountsPartial({
                 authority: context.authority.publicKey,
@@ -56,6 +57,7 @@ describe("Mandate Modification", () => {
                     newLimit: new anchor.BN(2_000_000),
                     newIsUnlimitedSpend: true,
                     newDebitType: { variable: {} },
+                    newDebitFrequencySeconds: new anchor.BN(60),
                 })
                 .accountsPartial({
                     authority: unauthorizedUser.publicKey,
@@ -68,7 +70,8 @@ describe("Mandate Modification", () => {
 
             expect.fail("Should have rejected non-authority modification");
         } catch (error) {
-            expect(error.error.errorCode.code).to.equal("InvalidAuthority");
+            // PDA seeds constraint fails first (seeds include authority)
+            expect(error.error.errorCode.code).to.equal("ConstraintSeeds");
         }
     });
 
@@ -83,6 +86,7 @@ describe("Mandate Modification", () => {
                     newLimit: new anchor.BN(2_000_000),
                     newIsUnlimitedSpend: false,
                     newDebitType: { fixed: {} },
+                    newDebitFrequencySeconds: new anchor.BN(60),
                 })
                 .accountsPartial({
                     authority: unapprovedContext.authority.publicKey,
@@ -107,6 +111,7 @@ describe("Mandate Modification", () => {
                     newLimit: new anchor.BN(1_000_000),
                     newIsUnlimitedSpend: false,
                     newDebitType: { fixed: {} },
+                    newDebitFrequencySeconds: new anchor.BN(60),
                 })
                 .accountsPartial({
                     authority: context.authority.publicKey,
@@ -131,6 +136,7 @@ describe("Mandate Modification", () => {
                     newLimit: new anchor.BN(500_000), // Less than amount_per_debit
                     newIsUnlimitedSpend: false,
                     newDebitType: { fixed: {} },
+                    newDebitFrequencySeconds: new anchor.BN(60),
                 })
                 .accountsPartial({
                     authority: context.authority.publicKey,
@@ -157,11 +163,12 @@ describe("Mandate Cancellation", () => {
         await testFactory.createApprovedFixedMandate(context);
     });
 
-    it("allows user to cancel their mandate", async () => {
-        await context.program.methods
+    it("allows authority to cancel with user signature (delegation still active)", async () => {
+        // When delegation is still active, user must be a signer
+        const tx = await context.program.methods
             .cancelMandate()
             .accountsPartial({
-                signer: context.user.publicKey,
+                authority: context.authority.publicKey,
                 user: context.user.publicKey,
                 mandate: context.mandatePda,
                 mint: context.mint,
@@ -169,8 +176,20 @@ describe("Mandate Cancellation", () => {
                 tokenProgram: TOKEN_PROGRAM_ID,
                 systemProgram: anchor.web3.SystemProgram.programId,
             })
-            .signers([context.user])
-            .rpc();
+            .transaction();
+
+        // Manually add both signatures
+        tx.feePayer = context.authority.publicKey;
+        const { blockhash, lastValidBlockHeight } = await context.program.provider.connection.getLatestBlockhash();
+        tx.recentBlockhash = blockhash;
+        tx.sign(context.authority, context.user);
+
+        const signature = await context.program.provider.connection.sendRawTransaction(tx.serialize());
+        await context.program.provider.connection.confirmTransaction({
+            signature,
+            blockhash,
+            lastValidBlockHeight,
+        });
 
         try {
             await context.program.account.mandate.fetch(context.mandatePda);
@@ -180,11 +199,24 @@ describe("Mandate Cancellation", () => {
         }
     });
 
-    it("allows authority to cancel mandate", async () => {
+    it("allows authority to cancel after user revoked delegation externally", async () => {
+        // User revokes delegation via wallet (simulated)
+        const { revoke } = await import("@solana/spl-token");
+        await revoke(
+            testFactory.getConnection(),
+            context.user,
+            context.userTokenAccount,
+            context.user,
+            [],
+            undefined,
+            TOKEN_PROGRAM_ID
+        );
+
+        // Authority can now cancel without user signature
         await context.program.methods
             .cancelMandate()
             .accountsPartial({
-                signer: context.authority.publicKey,
+                authority: context.authority.publicKey,
                 user: context.user.publicKey,
                 mandate: context.mandatePda,
                 mint: context.mint,
@@ -203,18 +235,18 @@ describe("Mandate Cancellation", () => {
         }
     });
 
-    it("rejects cancellation by unauthorized user", async () => {
-        const unauthorizedUser = Keypair.generate();
+    it("rejects cancellation by unauthorized authority", async () => {
+        const unauthorizedAuthority = Keypair.generate();
         await testFactory.airdropAndConfirm(
-            unauthorizedUser.publicKey,
+            unauthorizedAuthority.publicKey,
             anchor.web3.LAMPORTS_PER_SOL
         );
 
         try {
-            await context.program.methods
+            const tx = await context.program.methods
                 .cancelMandate()
                 .accountsPartial({
-                    signer: unauthorizedUser.publicKey,
+                    authority: unauthorizedAuthority.publicKey,
                     user: context.user.publicKey,
                     mandate: context.mandatePda,
                     mint: context.mint,
@@ -222,12 +254,18 @@ describe("Mandate Cancellation", () => {
                     tokenProgram: TOKEN_PROGRAM_ID,
                     systemProgram: anchor.web3.SystemProgram.programId,
                 })
-                .signers([unauthorizedUser])
-                .rpc();
+                .transaction();
 
-            expect.fail("Should have rejected unauthorized cancellation");
+            tx.feePayer = unauthorizedAuthority.publicKey;
+            const { blockhash } = await context.program.provider.connection.getLatestBlockhash();
+            tx.recentBlockhash = blockhash;
+            tx.sign(unauthorizedAuthority, context.user);
+
+            await context.program.provider.connection.sendRawTransaction(tx.serialize());
+
+            expect.fail("Should have rejected unauthorized authority cancellation");
         } catch (error) {
-            expect(error.error?.errorCode?.code || error.message).to.include("UnauthorizedOwner");
+            expect(error.message).to.include("ConstraintSeeds");
         }
     });
 });

@@ -21,7 +21,7 @@ pub struct CreateMandate<'info> {
         init,
         payer = authority,
         space = 8 + Mandate::INIT_SPACE,
-        seeds = [b"mandate", mandate_id.to_le_bytes().as_ref()],
+        seeds = [b"mandate", authority.key().as_ref(), mandate_id.to_le_bytes().as_ref()],
         bump,
     )]
     pub mandate: Box<Account<'info, Mandate>>,

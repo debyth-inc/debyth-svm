@@ -7,18 +7,20 @@ use crate::state::Mandate;
 
 #[derive(Accounts)]
 pub struct CancelMandate<'info> {
+    /// Authority who created the mandate - can always cancel to reclaim rent
     #[account(mut)]
-    pub signer: Signer<'info>, // Whoever is cancelling (user or authority)
+    pub authority: Signer<'info>,
 
-    /// CHECK: The actual user of the mandate (for validation). This is validated against the mandate.user field in the constraint below.
-    pub user: UncheckedAccount<'info>,
+    /// User account (must sign if delegation is still active)
+    /// CHECK: Validated against mandate.user. If delegation active, must be signer.
+    pub user: AccountInfo<'info>,
 
     #[account(
         mut,
-        close = signer, // Rent goes to the signer
-        seeds = [b"mandate", mandate.id.to_le_bytes().as_ref()],
+        close = authority,
+        seeds = [b"mandate", authority.key().as_ref(), mandate.id.to_le_bytes().as_ref()],
         bump = mandate.bump,
-        constraint = mandate.user == signer.key() || mandate.authority == signer.key() @ MandateError::UnauthorizedOwner,
+        constraint = mandate.authority == authority.key() @ MandateError::InvalidAuthority,
     )]
     pub mandate: Account<'info, Mandate>,
 
@@ -27,7 +29,7 @@ pub struct CancelMandate<'info> {
     #[account(
         mut,
         associated_token::mint = mint,
-        associated_token::authority = mandate.user, // Always the mandate user's token account
+        associated_token::authority = mandate.user,
         associated_token::token_program = token_program,
     )]
     pub user_token_account: Account<'info, TokenAccount>,
@@ -38,38 +40,34 @@ pub struct CancelMandate<'info> {
 
 impl<'info> CancelMandate<'info> {
     pub fn cancel(&mut self) -> Result<()> {
-        // Verify mandate owner (redundant with account constraint, but kept for safety)
+        // Validate user account matches mandate
         require!(
-            self.signer.key() == self.mandate.user || self.signer.key() == self.mandate.authority,
-            MandateError::UnauthorizedOwner
+            self.user.key() == self.mandate.user,
+            MandateError::InvalidTokenAccount
         );
 
-        // Verify mandate status
-        require!(self.mandate.is_approved, MandateError::MandateNotApproved);
+        let now = Clock::get()?.unix_timestamp;
 
-        // Authority should be able to cancel mandate for security (if contract is compromised)
-        // However, only the user can revoke their own token delegation
-        if self.signer.key() == self.mandate.user {
-            // User is cancelling - revoke the token delegation
+        // Try to revoke delegation if it still exists
+        // If delegation exists, user must sign to revoke
+        if self.user_token_account.delegate == Some(self.mandate.key()).into() {
+            // Delegate is still the mandate, user must sign to revoke
+            require!(
+                self.user.is_signer,
+                MandateError::UnauthorizedUser
+            );
+
             let cpi_program = self.token_program.to_account_info();
             let cpi_accounts = Revoke {
                 source: self.user_token_account.to_account_info(),
-                authority: self.signer.to_account_info(), // User signs for revoke
+                authority: self.user.clone(),
             };
             let cpi_context = CpiContext::new(cpi_program, cpi_accounts);
             revoke(cpi_context)?;
         }
-        // Quick note: If authority now actually cancels, then mandate will become inactive but delegation remains
-        // User should manually revoke delegation after authority emergency cancellation
+        // If delegation was already revoked externally, we just close the account
 
-        let now = Clock::get()?.unix_timestamp;
-
-        // Update mandate state
-        self.mandate.is_active = false;
-        self.mandate.is_approved = false;
-        self.mandate.updated_at = now;
-
-        // Emit cancellation event
+        // Emit cancellation event before account is closed
         emit!(MandateCancelledEvent {
             mandate_id: self.mandate.id,
             user: self.user.key(),
@@ -77,6 +75,8 @@ impl<'info> CancelMandate<'info> {
             timestamp: now,
         });
 
+        // Mandate account is automatically closed via 'close' constraint
+        // Rent refund goes to authority (they paid for account creation)
         Ok(())
     }
 }
