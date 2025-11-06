@@ -47,4 +47,13 @@ pub enum MandateError {
     InsufficientBalance,
     #[msg("Token account does not have the mandate as delegate")]
     InvalidDelegate,
+
+    #[msg("Debit amount exceeds maximum allowed value")]
+    DebitAmountTooLarge,
+    #[msg("Debit amount below minimum allowed value")]
+    DebitAmountTooSmall,
+    #[msg("Debit frequency exceeds maximum allowed value (10 years)")]
+    DebitFrequencyTooLarge,
+    #[msg("Arithmetic overflow in time calculation")]
+    ArithmeticOverflow,
 }

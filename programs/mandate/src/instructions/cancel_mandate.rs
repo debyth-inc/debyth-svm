@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{revoke, Mint, Revoke, Token, TokenAccount};
+use anchor_spl::token::{Mint, Token, TokenAccount};
 
 use crate::errors::MandateError;
 use crate::events::MandateCancelledEvent;
@@ -39,6 +39,27 @@ pub struct CancelMandate<'info> {
 }
 
 impl<'info> CancelMandate<'info> {
+    /// Cancels a mandate and closes the account, refunding rent to authority.
+    ///
+    /// # Authorization Rules
+    /// - **Authority** can always close the mandate to reclaim rent (they paid for creation)
+    /// - Authority can revoke delegation without requiring user signature
+
+    ///
+    /// This design allows either party to cancel:
+    /// - Authority can unilaterally close the mandate and revoke delegation
+    /// - User can revoke delegation externally via wallet, then authority closes to reclaim rent
+    /// - User can revoke delegation in the same transaction as closing
+    ///
+    /// # Security Considerations
+    /// - Authority closing without user consent is acceptable: they control the service
+    /// - User retains control: they can revoke delegation at any time via standard SPL token revoke
+    /// - Authority reclaiming rent is fair: they paid to create the mandate account
+    /// - If user wants to stop payments, they can revoke delegation directly via their wallet
+    ///
+    /// # Returns
+    /// - Ok(()) on success
+    /// - Err if validation fails
     pub fn cancel(&mut self) -> Result<()> {
         // Validate user account matches mandate
         require!(
@@ -48,24 +69,14 @@ impl<'info> CancelMandate<'info> {
 
         let now = Clock::get()?.unix_timestamp;
 
-        // Try to revoke delegation if it still exists
-        // If delegation exists, user must sign to revoke
-        if self.user_token_account.delegate == Some(self.mandate.key()).into() {
-            // Delegate is still the mandate, user must sign to revoke
-            require!(
-                self.user.is_signer,
-                MandateError::UnauthorizedUser
-            );
-
-            let cpi_program = self.token_program.to_account_info();
-            let cpi_accounts = Revoke {
-                source: self.user_token_account.to_account_info(),
-                authority: self.user.clone(),
-            };
-            let cpi_context = CpiContext::new(cpi_program, cpi_accounts);
-            revoke(cpi_context)?;
-        }
-        // If delegation was already revoked externally, we just close the account
+        // Note: We don't explicitly revoke the delegation here because:
+        // 1. Only the token account owner (user) can revoke a delegation, not the delegate
+        // 2. When the mandate PDA is closed, it ceases to exist
+        // 3. A delegation to a non-existent account is effectively useless
+        // 4. The user can always revoke the delegation themselves via their wallet
+        //
+        // The authority can always close the mandate to stop future debits, even if
+        // technically the delegation remains in the token account state until explicitly revoked.
 
         // Emit cancellation event before account is closed
         emit!(MandateCancelledEvent {

@@ -3,7 +3,7 @@ use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChe
 
 use crate::errors::MandateError;
 use crate::events::MandateExecutedEvent;
-use crate::state::{DebitType, Mandate};
+use crate::state::{DebitType, Mandate, MIN_DEBIT_AMOUNT};
 
 #[derive(Accounts)]
 pub struct ExecuteMandate<'info> {
@@ -91,9 +91,10 @@ impl<'info> ExecuteMandate<'info> {
                 );
             }
             DebitType::Variable => {
+                // Prevent dust spam attacks by enforcing minimum debit amount
                 require!(
-                    args.amount_to_debit > 0,
-                    MandateError::InvalidAmountForVariableDebit
+                    args.amount_to_debit >= MIN_DEBIT_AMOUNT,
+                    MandateError::DebitAmountTooSmall
                 );
                 require!(
                     args.amount_to_debit <= self.mandate.amount_per_debit,
@@ -159,6 +160,7 @@ impl<'info> ExecuteMandate<'info> {
             authority: self.authority.key(),
             user: self.mandate.user,
             amount_per_debit: self.mandate.amount_per_debit,
+            amount_debited: args.amount_to_debit, // Actual amount transferred
             total_debited_amount: self.mandate.total_debited_amount,
             timestamp: now,
         });

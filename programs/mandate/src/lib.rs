@@ -1,6 +1,3 @@
-#![allow(unexpected_cfgs)]
-#![allow(deprecated)]
-
 use anchor_lang::prelude::*;
 
 declare_id!("EzScVWXcCYzcpLKhFg6U3uA1VugCnN3mLauqtb4MhNRg");
@@ -44,6 +41,11 @@ pub mod mandate {
 
     pub fn cancel_mandate(ctx: Context<CancelMandate>) -> Result<()> {
         ctx.accounts.cancel()?;
+        Ok(())
+    }
+
+    pub fn toggle_status(ctx: Context<ToggleStatus>) -> Result<()> {
+        ctx.accounts.toggle_status()?;
         Ok(())
     }
 }

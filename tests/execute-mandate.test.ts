@@ -353,7 +353,7 @@ describe("Variable Debit Mandate Execution", () => {
             expect.fail("Should have rejected zero amount for variable debit");
         } catch (error) {
             expect(error.error?.errorCode?.code || error.error?.code).to.equal(
-                "InvalidAmountForVariableDebit"
+                "DebitAmountTooSmall"
             );
         }
     });

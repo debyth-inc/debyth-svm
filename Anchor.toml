@@ -8,6 +8,9 @@ skip-lint = false
 [programs.localnet]
 mandate = "EzScVWXcCYzcpLKhFg6U3uA1VugCnN3mLauqtb4MhNRg"
 
+[programs.devnet]
+mandate = "EzScVWXcCYzcpLKhFg6U3uA1VugCnN3mLauqtb4MhNRg"
+
 [registry]
 url = "https://api.apr.dev"
 
@@ -16,4 +19,4 @@ cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.test.ts"
+test = "yarn run ts-mocha -p ./tsconfig.json -t 120000 tests/**/*.test.ts"

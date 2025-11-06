@@ -5,7 +5,10 @@ use anchor_spl::{
 };
 
 use crate::events::MandateCreatedEvent;
-use crate::state::{DebitType, Mandate, UNLIMITED_ALLOWANCE};
+use crate::state::{
+    DebitType, Mandate, MAX_DEBIT_AMOUNT, MAX_DEBIT_FREQUENCY_SECONDS, MIN_DEBIT_AMOUNT,
+    UNLIMITED_ALLOWANCE,
+};
 
 use crate::errors::MandateError;
 
@@ -57,18 +60,45 @@ impl<'info> CreateMandate<'info> {
         args: CreateMandateArgs,
         bumps: &CreateMandateBumps,
     ) -> Result<()> {
-        // Validate inputs
-        require!(args.amount_per_debit > 0, MandateError::InvalidAmount);
+        // Validate amount_per_debit bounds
+        require!(
+            args.amount_per_debit >= MIN_DEBIT_AMOUNT,
+            MandateError::DebitAmountTooSmall
+        );
+        require!(
+            args.amount_per_debit <= MAX_DEBIT_AMOUNT,
+            MandateError::DebitAmountTooLarge
+        );
+
+        // Validate debit_frequency_seconds bounds
         require!(
             args.debit_frequency_seconds > 0,
             MandateError::InvalidDebitFrequency
         );
+        require!(
+            args.debit_frequency_seconds <= MAX_DEBIT_FREQUENCY_SECONDS,
+            MandateError::DebitFrequencyTooLarge
+        );
+
+        // Validate limit if not unlimited
         if !args.is_unlimited_spend {
             require!(
                 args.limit >= args.amount_per_debit,
                 MandateError::InvalidSpendCap
             );
+            require!(
+                args.limit <= MAX_DEBIT_AMOUNT,
+                MandateError::DebitAmountTooLarge
+            );
         }
+
+        // Check for potential overflow in time calculations
+        // Ensure that debit_frequency_seconds won't cause overflow when added to timestamps
+        let max_realistic_timestamp = i64::MAX / 2; // Leave room for future timestamps
+        require!(
+            args.debit_frequency_seconds <= max_realistic_timestamp as u64,
+            MandateError::ArithmeticOverflow
+        );
 
         require!(
             self.user_token_account.mint == self.mint.key(),
