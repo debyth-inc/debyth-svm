@@ -6,11 +6,10 @@ use anchor_spl::{
 
 use crate::events::MandateCreatedEvent;
 use crate::state::{
-    DebitType, Mandate, MAX_DEBIT_AMOUNT, MAX_DEBIT_FREQUENCY_SECONDS, MIN_DEBIT_AMOUNT,
-    UNLIMITED_ALLOWANCE,
+    DebitType, Mandate, MAX_DEBIT_AMOUNT, UNLIMITED_ALLOWANCE,
 };
 
-use crate::errors::MandateError;
+use crate::errors::{MandateError, validation::*};
 
 #[derive(Accounts)]
 #[instruction(mandate_id: u64)]
@@ -61,44 +60,21 @@ impl<'info> CreateMandate<'info> {
         bumps: &CreateMandateBumps,
     ) -> Result<()> {
         // Validate amount_per_debit bounds
-        require!(
-            args.amount_per_debit >= MIN_DEBIT_AMOUNT,
-            MandateError::DebitAmountTooSmall
-        );
-        require!(
-            args.amount_per_debit <= MAX_DEBIT_AMOUNT,
-            MandateError::DebitAmountTooLarge
-        );
+        validate_debit_amount(args.amount_per_debit)?;
 
-        // Validate debit_frequency_seconds bounds
-        require!(
-            args.debit_frequency_seconds > 0,
-            MandateError::InvalidDebitFrequency
-        );
-        require!(
-            args.debit_frequency_seconds <= MAX_DEBIT_FREQUENCY_SECONDS,
-            MandateError::DebitFrequencyTooLarge
-        );
+        // Validate debit_frequency_seconds
+        validate_debit_frequency(args.debit_frequency_seconds)?;
 
-        // Validate limit if not unlimited
+        // Validate limit and spend cap relationship
+        validate_spend_cap(args.limit, args.amount_per_debit, args.is_unlimited_spend)?;
+
+        // Additional validation for non-unlimited mandates
         if !args.is_unlimited_spend {
-            require!(
-                args.limit >= args.amount_per_debit,
-                MandateError::InvalidSpendCap
-            );
             require!(
                 args.limit <= MAX_DEBIT_AMOUNT,
                 MandateError::DebitAmountTooLarge
             );
         }
-
-        // Check for potential overflow in time calculations
-        // Ensure that debit_frequency_seconds won't cause overflow when added to timestamps
-        let max_realistic_timestamp = i64::MAX / 2; // Leave room for future timestamps
-        require!(
-            args.debit_frequency_seconds <= max_realistic_timestamp as u64,
-            MandateError::ArithmeticOverflow
-        );
 
         require!(
             self.user_token_account.mint == self.mint.key(),

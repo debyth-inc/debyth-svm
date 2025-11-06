@@ -4,11 +4,10 @@ use anchor_spl::{
     token::{approve, Approve, Mint, Token, TokenAccount},
 };
 
-use crate::errors::MandateError;
+use crate::errors::{MandateError, validation::*};
 use crate::events::MandateModifiedEvent;
 use crate::state::{
-    DebitType, Mandate, MAX_DEBIT_AMOUNT, MAX_DEBIT_FREQUENCY_SECONDS, MIN_DEBIT_AMOUNT,
-    UNLIMITED_ALLOWANCE,
+    DebitType, Mandate, MAX_DEBIT_AMOUNT, UNLIMITED_ALLOWANCE,
 };
 
 #[derive(Accounts)]
@@ -70,47 +69,28 @@ impl<'info> ModifyMandate<'info> {
         require!(self.mandate.is_approved, MandateError::MandateNotApproved);
 
         // Validate new amount_per_debit bounds
-        require!(
-            args.new_amount_per_debit >= MIN_DEBIT_AMOUNT,
-            MandateError::DebitAmountTooSmall
-        );
-        require!(
-            args.new_amount_per_debit <= MAX_DEBIT_AMOUNT,
-            MandateError::DebitAmountTooLarge
-        );
+        validate_debit_amount(args.new_amount_per_debit)?;
 
-        // Validate new debit_frequency_seconds bounds
-        require!(
-            args.new_debit_frequency_seconds > 0,
-            MandateError::InvalidDebitFrequency
-        );
-        require!(
-            args.new_debit_frequency_seconds <= MAX_DEBIT_FREQUENCY_SECONDS,
-            MandateError::DebitFrequencyTooLarge
-        );
+        // Validate new debit_frequency_seconds
+        validate_debit_frequency(args.new_debit_frequency_seconds)?;
 
+        // Validate new limit and spend cap relationship
+        validate_spend_cap(args.new_limit, args.new_amount_per_debit, args.new_is_unlimited_spend)?;
+
+        // Validate new limit is not less than already debited amount
+        validate_new_limit(
+            args.new_limit,
+            self.mandate.total_debited_amount,
+            args.new_is_unlimited_spend,
+        )?;
+
+        // Additional validation for non-unlimited mandates
         if !args.new_is_unlimited_spend {
-            require!(
-                args.new_limit >= args.new_amount_per_debit,
-                MandateError::InvalidSpendCap
-            );
             require!(
                 args.new_limit <= MAX_DEBIT_AMOUNT,
                 MandateError::DebitAmountTooLarge
             );
-            // SECURITY: Ensure new limit is not less than already debited amount
-            require!(
-                args.new_limit >= self.mandate.total_debited_amount,
-                MandateError::InvalidSpendCap
-            );
         }
-
-        // Check for potential overflow in time calculations
-        let max_realistic_timestamp = i64::MAX / 2;
-        require!(
-            args.new_debit_frequency_seconds <= max_realistic_timestamp as u64,
-            MandateError::ArithmeticOverflow
-        );
 
         // Update mandate fields
         self.mandate.amount_per_debit = args.new_amount_per_debit;
