@@ -55,11 +55,15 @@ describe("Security: Modify Mandate Edge Cases", () => {
                 })
                 .accountsPartial({
                     authority: context.authority.publicKey,
+                    user: context.user.publicKey,
                     mandate: context.mandatePda,
+                    mint: context.mint,
+                    userTokenAccount: context.userTokenAccount,
+                    associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
                     tokenProgram: TOKEN_PROGRAM_ID,
                     systemProgram: anchor.web3.SystemProgram.programId,
                 })
-                .signers([context.authority])
+                .signers([context.authority, context.user])
                 .rpc();
 
             expect.fail("Should have rejected limit reduction below total_debited_amount");
@@ -129,11 +133,15 @@ describe("Security: Modify Mandate Edge Cases", () => {
                 })
                 .accountsPartial({
                     authority: unlimitedContext.authority.publicKey,
+                    user: unlimitedContext.user.publicKey,
                     mandate: unlimitedContext.mandatePda,
+                    mint: unlimitedContext.mint,
+                    userTokenAccount: unlimitedContext.userTokenAccount,
+                    associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
                     tokenProgram: TOKEN_PROGRAM_ID,
                     systemProgram: anchor.web3.SystemProgram.programId,
                 })
-                .signers([unlimitedContext.authority])
+                .signers([unlimitedContext.authority, unlimitedContext.user])
                 .rpc();
 
             expect.fail("Should have rejected unlimited to limited with insufficient limit");
@@ -152,11 +160,15 @@ describe("Security: Modify Mandate Edge Cases", () => {
             })
             .accountsPartial({
                 authority: unlimitedContext.authority.publicKey,
+                user: unlimitedContext.user.publicKey,
                 mandate: unlimitedContext.mandatePda,
+                mint: unlimitedContext.mint,
+                userTokenAccount: unlimitedContext.userTokenAccount,
+                associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
                 tokenProgram: TOKEN_PROGRAM_ID,
                 systemProgram: anchor.web3.SystemProgram.programId,
             })
-            .signers([unlimitedContext.authority])
+            .signers([unlimitedContext.authority, unlimitedContext.user])
             .rpc();
 
         const mandateAfter = await unlimitedContext.program.account.mandate.fetch(
@@ -174,8 +186,9 @@ describe("Security: Time Overflow and Frequency Edge Cases", () => {
     it("handles extreme debit_frequency_seconds without overflow", async () => {
         context = await testFactory.createTestContext();
 
-        // Create mandate with very large frequency (near i64::MAX / 2 to be safe)
-        const EXTREME_FREQUENCY = new anchor.BN("4611686018427387903"); // i64::MAX / 2
+        // Create mandate with very large frequency at the maximum allowed value (10 years)
+        // MAX_DEBIT_FREQUENCY_SECONDS = 31_536_000 * 10 = 315_360_000 seconds
+        const EXTREME_FREQUENCY = new anchor.BN(315_360_000);
 
         await testFactory.createApprovedFixedMandate(context, {
             amountPerDebit: new anchor.BN(100_000),
@@ -235,9 +248,11 @@ describe("Security: Authority Cancel Edge Cases", () => {
         });
     });
 
-    it("authority cancel closes mandate and removes delegation", async () => {
-        // When delegation is still active, user must be a signer
-        const tx = await context.program.methods
+    it("authority cancel closes mandate (delegation remains until user revokes)", async () => {
+        // Authority can cancel without user signature
+        // Note: Delegation is not explicitly revoked (only owner can revoke), but the
+        // mandate PDA is closed, making any remaining delegation to it useless
+        await context.program.methods
             .cancelMandate()
             .accountsPartial({
                 authority: context.authority.publicKey,
@@ -248,19 +263,8 @@ describe("Security: Authority Cancel Edge Cases", () => {
                 tokenProgram: TOKEN_PROGRAM_ID,
                 systemProgram: anchor.web3.SystemProgram.programId,
             })
-            .transaction();
-
-        tx.feePayer = context.authority.publicKey;
-        const { blockhash, lastValidBlockHeight } = await context.program.provider.connection.getLatestBlockhash();
-        tx.recentBlockhash = blockhash;
-        tx.sign(context.authority, context.user);
-
-        const signature = await context.program.provider.connection.sendRawTransaction(tx.serialize());
-        await context.program.provider.connection.confirmTransaction({
-            signature,
-            blockhash,
-            lastValidBlockHeight,
-        });
+            .signers([context.authority])
+            .rpc();
 
         // Mandate account should be closed
         try {
@@ -270,14 +274,8 @@ describe("Security: Authority Cancel Edge Cases", () => {
             expect(error.message).to.include("Account does not exist");
         }
 
-        // Check delegation is removed
-        const tokenAccount = await testFactory
-            .getConnection()
-            .getParsedAccountInfo(context.userTokenAccount);
-
-        // @ts-ignore
-        const delegate = tokenAccount.value?.data?.parsed?.info?.delegate;
-        expect(delegate).to.be.undefined;
+        // Note: Delegation technically remains in token account state (pointing to non-existent PDA)
+        // User can revoke it themselves if desired, but it's harmless since the PDA no longer exists
     });
 });
 
@@ -292,8 +290,8 @@ describe("Security: Mandate ID Reuse", () => {
         // Create and approve first mandate
         await testFactory.createApprovedFixedMandate(context1);
 
-        // Cancel it (authority cancels with user signature since delegation is active)
-        const cancelTx = await context1.program.methods
+        // Cancel it (authority can cancel without user signature)
+        await context1.program.methods
             .cancelMandate()
             .accountsPartial({
                 authority: context1.authority.publicKey,
@@ -304,19 +302,8 @@ describe("Security: Mandate ID Reuse", () => {
                 tokenProgram: TOKEN_PROGRAM_ID,
                 systemProgram: anchor.web3.SystemProgram.programId,
             })
-            .transaction();
-
-        cancelTx.feePayer = context1.authority.publicKey;
-        const { blockhash, lastValidBlockHeight } = await context1.program.provider.connection.getLatestBlockhash();
-        cancelTx.recentBlockhash = blockhash;
-        cancelTx.sign(context1.authority, context1.user);
-
-        const cancelSig = await context1.program.provider.connection.sendRawTransaction(cancelTx.serialize());
-        await context1.program.provider.connection.confirmTransaction({
-            signature: cancelSig,
-            blockhash,
-            lastValidBlockHeight,
-        });
+            .signers([context1.authority])
+            .rpc();
 
         // Create new context with SAME authority and SAME mandate ID
         const user2 = Keypair.generate();
@@ -457,8 +444,9 @@ describe("Security: Arithmetic Edge Cases", () => {
     it("handles unlimited mandate with large debit amounts", async () => {
         const context = await testFactory.createTestContext();
 
-        // Create unlimited variable mandate with high amount per debit
-        const LARGE_AMOUNT = new anchor.BN("18446744073709551615"); // u64::MAX
+        // Create unlimited variable mandate with high amount per debit at MAX_DEBIT_AMOUNT
+        // MAX_DEBIT_AMOUNT = u64::MAX / 2
+        const LARGE_AMOUNT = new anchor.BN("9223372036854775807"); // u64::MAX / 2
 
         await testFactory.createApprovedUnlimitedMandate(context, {
             amountPerDebit: LARGE_AMOUNT,
@@ -471,6 +459,7 @@ describe("Security: Arithmetic Edge Cases", () => {
         // Verify unlimited allowance is set correctly
         expect(mandate.limit.toString()).to.equal("18446744073709551615");
         expect(mandate.isUnlimitedSpend).to.be.true;
+        expect(mandate.amountPerDebit.toString()).to.equal(LARGE_AMOUNT.toString());
     });
 });
 

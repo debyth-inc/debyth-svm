@@ -1,9 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{transfer_checked, Mint, Token, TokenAccount, TransferChecked};
 
-use crate::errors::MandateError;
+use crate::errors::{MandateError, validation::*};
 use crate::events::MandateExecutedEvent;
-use crate::state::{DebitType, Mandate};
+use crate::state::{DebitType, Mandate, MIN_DEBIT_AMOUNT};
 
 #[derive(Accounts)]
 pub struct ExecuteMandate<'info> {
@@ -55,32 +55,16 @@ impl<'info> ExecuteMandate<'info> {
         require!(self.mandate.is_active, MandateError::MandateNotActive);
         require!(self.mandate.is_approved, MandateError::MandateNotApproved);
 
-        // Check debit frequency (skip check for first execution when last_debit_date is 0)
+        // Get and validate current timestamp
         let now = Clock::get()?.unix_timestamp;
-        if self.mandate.last_debit_date != 0 {
-            // SECURITY: Use checked arithmetic to prevent overflow
-            let time_threshold = self
-                .mandate
-                .last_debit_date
-                .checked_add(self.mandate.debit_frequency_seconds as i64)
-                .ok_or(ProgramError::ArithmeticOverflow)?;
-            require!(
-                time_threshold <= now,
-                MandateError::InsufficientTimeSinceLastDebit
-            );
-        }
+        validate_timestamp(now)?;
 
-        // SECURITY FIX 3: Use checked arithmetic for limit check EARLY
-        let new_total = self
-            .mandate
-            .total_debited_amount
-            .checked_add(args.amount_to_debit)
-            .ok_or(ProgramError::ArithmeticOverflow)?;
-
-        require!(
-            new_total <= self.mandate.limit,
-            MandateError::DebitLimitExceeded
-        );
+        // Check debit frequency with enhanced validation
+        validate_frequency_elapsed(
+            self.mandate.last_debit_date,
+            self.mandate.debit_frequency_seconds,
+            now,
+        )?;
 
         // Amount validation based on debit type
         match self.mandate.debit_type {
@@ -91,9 +75,10 @@ impl<'info> ExecuteMandate<'info> {
                 );
             }
             DebitType::Variable => {
+                // Validate amount is within allowed range
                 require!(
-                    args.amount_to_debit > 0,
-                    MandateError::InvalidAmountForVariableDebit
+                    args.amount_to_debit >= MIN_DEBIT_AMOUNT,
+                    MandateError::DebitAmountTooSmall
                 );
                 require!(
                     args.amount_to_debit <= self.mandate.amount_per_debit,
@@ -102,17 +87,31 @@ impl<'info> ExecuteMandate<'info> {
             }
         }
 
-        // SECURITY FIX 5: Check if the user has sufficient balance
-        require!(
-            self.user_token_account.amount >= args.amount_to_debit,
-            MandateError::InsufficientBalance
-        );
+        // Validate limit with detailed context (handles overflow and limit checks)
+        let new_total = validate_debit_limit(
+            self.mandate.total_debited_amount,
+            args.amount_to_debit,
+            self.mandate.limit,
+            self.mandate.is_unlimited_spend,
+        )?;
 
-        // SECURITY FIX 2: Validate that the delegate is still active
+        // Validate sufficient balance
+        validate_sufficient_balance(
+            self.user_token_account.amount,
+            args.amount_to_debit,
+        )?;
+
+        // Validate delegation is set correctly
         require!(
             self.user_token_account.delegate == Some(self.mandate.key()).into(),
             MandateError::InvalidDelegate
         );
+
+        // Validate sufficient delegation amount
+        validate_sufficient_delegation(
+            self.user_token_account.delegated_amount,
+            args.amount_to_debit,
+        )?;
 
         // Token account validation
         require!(
@@ -159,6 +158,7 @@ impl<'info> ExecuteMandate<'info> {
             authority: self.authority.key(),
             user: self.mandate.user,
             amount_per_debit: self.mandate.amount_per_debit,
+            amount_debited: args.amount_to_debit, // Actual amount transferred
             total_debited_amount: self.mandate.total_debited_amount,
             timestamp: now,
         });

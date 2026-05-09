@@ -10,3 +10,5 @@ test-ledger
 *-wallet.json
 .idea/
 .claude/
+
+*IMPROVEMENTS_*.md

@@ -34,6 +34,7 @@ pub struct MandateExecutedEvent {
     pub authority: Pubkey,
     pub user: Pubkey,
     pub amount_per_debit: u64,
+    pub amount_debited: u64, // Actual amount transferred in this execution
     pub total_debited_amount: u64,
     pub timestamp: i64,
 }
@@ -47,8 +48,6 @@ pub struct MandateModifiedEvent {
     pub new_limit: u64,
     pub new_is_unlimited_spend: bool,
     pub new_debit_type: DebitType,
-    pub new_is_active: bool,
-    pub new_is_approved: bool,
     pub timestamp: i64,
 }
 
@@ -61,9 +60,10 @@ pub struct MandateCancelledEvent {
 }
 
 #[event]
-pub struct MandateExpiredEvent {
+pub struct MandateStatusToggledEvent {
     pub mandate_id: u64,
+    pub authority: Pubkey,
     pub user: Pubkey,
-    pub expired_at: i64,
+    pub is_active: bool,
     pub timestamp: i64,
 }

@@ -87,7 +87,7 @@ describe("Mandate Creation", () => {
             });
             expect.fail("Should have thrown error for zero amount_per_debit");
         } catch (error) {
-            expect(error.error.errorCode.code).to.equal("InvalidAmount");
+            expect(error.error.errorCode.code).to.equal("DebitAmountTooSmall");
         }
     });
 

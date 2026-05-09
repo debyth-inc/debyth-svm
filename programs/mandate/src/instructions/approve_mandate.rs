@@ -5,7 +5,7 @@ use anchor_spl::{
 };
 
 use crate::errors::MandateError;
-use crate::state::state::{Mandate, UNLIMITED_ALLOWANCE};
+use crate::state::{Mandate, UNLIMITED_ALLOWANCE};
 
 #[derive(Accounts)]
 #[instruction(mandate_id: u64)]

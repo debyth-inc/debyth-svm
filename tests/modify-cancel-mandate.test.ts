@@ -28,11 +28,15 @@ describe("Mandate Modification", () => {
             })
             .accountsPartial({
                 authority: context.authority.publicKey,
+                user: context.user.publicKey,
                 mandate: context.mandatePda,
+                mint: context.mint,
+                userTokenAccount: context.userTokenAccount,
+                associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
                 tokenProgram: TOKEN_PROGRAM_ID,
                 systemProgram: anchor.web3.SystemProgram.programId,
             })
-            .signers([context.authority])
+            .signers([context.authority, context.user])
             .rpc();
 
         const mandate = await context.program.account.mandate.fetch(context.mandatePda);
@@ -61,11 +65,15 @@ describe("Mandate Modification", () => {
                 })
                 .accountsPartial({
                     authority: unauthorizedUser.publicKey,
+                    user: context.user.publicKey,
                     mandate: context.mandatePda,
+                    mint: context.mint,
+                    userTokenAccount: context.userTokenAccount,
+                    associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
                     tokenProgram: TOKEN_PROGRAM_ID,
                     systemProgram: anchor.web3.SystemProgram.programId,
                 })
-                .signers([unauthorizedUser])
+                .signers([unauthorizedUser, context.user])
                 .rpc();
 
             expect.fail("Should have rejected non-authority modification");
@@ -90,11 +98,15 @@ describe("Mandate Modification", () => {
                 })
                 .accountsPartial({
                     authority: unapprovedContext.authority.publicKey,
+                    user: unapprovedContext.user.publicKey,
                     mandate: unapprovedContext.mandatePda,
+                    mint: unapprovedContext.mint,
+                    userTokenAccount: unapprovedContext.userTokenAccount,
+                    associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
                     tokenProgram: TOKEN_PROGRAM_ID,
                     systemProgram: anchor.web3.SystemProgram.programId,
                 })
-                .signers([unapprovedContext.authority])
+                .signers([unapprovedContext.authority, unapprovedContext.user])
                 .rpc();
 
             expect.fail("Should have rejected modification of unapproved mandate");
@@ -115,16 +127,20 @@ describe("Mandate Modification", () => {
                 })
                 .accountsPartial({
                     authority: context.authority.publicKey,
+                    user: context.user.publicKey,
                     mandate: context.mandatePda,
+                    mint: context.mint,
+                    userTokenAccount: context.userTokenAccount,
+                    associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
                     tokenProgram: TOKEN_PROGRAM_ID,
                     systemProgram: anchor.web3.SystemProgram.programId,
                 })
-                .signers([context.authority])
+                .signers([context.authority, context.user])
                 .rpc();
 
             expect.fail("Should have rejected zero amount_per_debit");
         } catch (error) {
-            expect(error.error.errorCode.code).to.equal("InvalidAmount");
+            expect(error.error.errorCode.code).to.equal("DebitAmountTooSmall");
         }
     });
 
@@ -140,11 +156,15 @@ describe("Mandate Modification", () => {
                 })
                 .accountsPartial({
                     authority: context.authority.publicKey,
+                    user: context.user.publicKey,
                     mandate: context.mandatePda,
+                    mint: context.mint,
+                    userTokenAccount: context.userTokenAccount,
+                    associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
                     tokenProgram: TOKEN_PROGRAM_ID,
                     systemProgram: anchor.web3.SystemProgram.programId,
                 })
-                .signers([context.authority])
+                .signers([context.authority, context.user])
                 .rpc();
 
             expect.fail("Should have rejected limit less than amount_per_debit");
@@ -163,9 +183,11 @@ describe("Mandate Cancellation", () => {
         await testFactory.createApprovedFixedMandate(context);
     });
 
-    it("allows authority to cancel with user signature (delegation still active)", async () => {
-        // When delegation is still active, user must be a signer
-        const tx = await context.program.methods
+    it("allows authority to cancel mandate (without user signature)", async () => {
+        // Authority can cancel mandate without user signature
+        // Note: Delegation is not explicitly revoked (only owner can revoke), but the
+        // mandate PDA is closed, making any remaining delegation to it useless
+        await context.program.methods
             .cancelMandate()
             .accountsPartial({
                 authority: context.authority.publicKey,
@@ -176,20 +198,8 @@ describe("Mandate Cancellation", () => {
                 tokenProgram: TOKEN_PROGRAM_ID,
                 systemProgram: anchor.web3.SystemProgram.programId,
             })
-            .transaction();
-
-        // Manually add both signatures
-        tx.feePayer = context.authority.publicKey;
-        const { blockhash, lastValidBlockHeight } = await context.program.provider.connection.getLatestBlockhash();
-        tx.recentBlockhash = blockhash;
-        tx.sign(context.authority, context.user);
-
-        const signature = await context.program.provider.connection.sendRawTransaction(tx.serialize());
-        await context.program.provider.connection.confirmTransaction({
-            signature,
-            blockhash,
-            lastValidBlockHeight,
-        });
+            .signers([context.authority])
+            .rpc();
 
         try {
             await context.program.account.mandate.fetch(context.mandatePda);
@@ -259,7 +269,8 @@ describe("Mandate Cancellation", () => {
             tx.feePayer = unauthorizedAuthority.publicKey;
             const { blockhash } = await context.program.provider.connection.getLatestBlockhash();
             tx.recentBlockhash = blockhash;
-            tx.sign(unauthorizedAuthority, context.user);
+            // Only unauthorized authority signs - user signature not needed since this will fail on PDA constraint
+            tx.sign(unauthorizedAuthority);
 
             await context.program.provider.connection.sendRawTransaction(tx.serialize());
 

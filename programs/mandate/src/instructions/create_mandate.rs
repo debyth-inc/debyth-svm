@@ -5,9 +5,11 @@ use anchor_spl::{
 };
 
 use crate::events::MandateCreatedEvent;
-use crate::state::{DebitType, Mandate, UNLIMITED_ALLOWANCE};
+use crate::state::{
+    DebitType, Mandate, MAX_DEBIT_AMOUNT, UNLIMITED_ALLOWANCE,
+};
 
-use crate::errors::MandateError;
+use crate::errors::{MandateError, validation::*};
 
 #[derive(Accounts)]
 #[instruction(mandate_id: u64)]
@@ -57,16 +59,20 @@ impl<'info> CreateMandate<'info> {
         args: CreateMandateArgs,
         bumps: &CreateMandateBumps,
     ) -> Result<()> {
-        // Validate inputs
-        require!(args.amount_per_debit > 0, MandateError::InvalidAmount);
-        require!(
-            args.debit_frequency_seconds > 0,
-            MandateError::InvalidDebitFrequency
-        );
+        // Validate amount_per_debit bounds
+        validate_debit_amount(args.amount_per_debit)?;
+
+        // Validate debit_frequency_seconds
+        validate_debit_frequency(args.debit_frequency_seconds)?;
+
+        // Validate limit and spend cap relationship
+        validate_spend_cap(args.limit, args.amount_per_debit, args.is_unlimited_spend)?;
+
+        // Additional validation for non-unlimited mandates
         if !args.is_unlimited_spend {
             require!(
-                args.limit >= args.amount_per_debit,
-                MandateError::InvalidSpendCap
+                args.limit <= MAX_DEBIT_AMOUNT,
+                MandateError::DebitAmountTooLarge
             );
         }
 
