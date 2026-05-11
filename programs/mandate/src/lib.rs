@@ -1,3 +1,4 @@
+#![allow(deprecated, unexpected_cfgs)]
 use anchor_lang::prelude::*;
 
 declare_id!("EzScVWXcCYzcpLKhFg6U3uA1VugCnN3mLauqtb4MhNRg");
@@ -46,6 +47,16 @@ pub mod mandate {
 
     pub fn toggle_status(ctx: Context<ToggleStatus>) -> Result<()> {
         ctx.accounts.toggle_status()?;
+        Ok(())
+    }
+
+    pub fn pause_execution(ctx: Context<PauseExecution>) -> Result<()> {
+        ctx.accounts.pause_execution()?;
+        Ok(())
+    }
+
+    pub fn resume_execution(ctx: Context<ResumeExecution>) -> Result<()> {
+        ctx.accounts.resume_execution()?;
         Ok(())
     }
 }

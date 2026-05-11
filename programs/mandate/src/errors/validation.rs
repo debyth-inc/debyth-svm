@@ -176,3 +176,70 @@ pub fn validate_sufficient_delegation(
     );
     Ok(())
 }
+
+// ============================================================================
+// NEW VALIDATION FUNCTIONS FOR REBUILD
+// ============================================================================
+
+/// Validates policy timing (start_at, end_at, and interval)
+#[inline(always)]
+pub fn validate_policy_timing(
+    start_at: i64,
+    end_at: i64,
+    min_interval_seconds: u64,
+    now: i64,
+) -> Result<()> {
+    // Policy end must be after start
+    require!(end_at > start_at, MandateError::InvalidPolicyTiming);
+
+    // Policy must not be in the past (allow small grace period)
+    require!(start_at <= now + 15, MandateError::InvalidPolicyTiming);
+
+    // Policy must not be too far in the future (10 years max)
+    let ten_years_in_future = now + (31_536_000 * 10);
+    require!(start_at <= ten_years_in_future, MandateError::InvalidPolicyTiming);
+
+    // End must be before ten years from now
+    require!(end_at <= ten_years_in_future, MandateError::InvalidPolicyTiming);
+
+    // Min interval must be non-zero
+    require!(min_interval_seconds > 0, MandateError::InvalidDebitFrequency);
+
+    Ok(())
+}
+
+/// Validates that nonce is not already used
+#[inline(always)]
+pub fn validate_nonce(nonce: u64, last_nonce: u64) -> Result<()> {
+    require!(nonce > 0, MandateError::InvalidNonce);
+    require!(nonce > last_nonce, MandateError::NonceAlreadyUsed);
+    Ok(())
+}
+
+/// Validates sender consent for modifications
+#[inline(always)]
+pub fn validate_sender_consent(sender: Pubkey, mandate_sender: Pubkey) -> Result<()> {
+    require!(sender == mandate_sender, MandateError::UnauthorizedSender);
+    Ok(())
+}
+
+/// Validates recipient matches mandate recipient
+#[inline(always)]
+pub fn validate_recipient(recipient: Pubkey, mandate_recipient: Pubkey) -> Result<()> {
+    require!(recipient == mandate_recipient, MandateError::InvalidRecipient);
+    Ok(())
+}
+
+/// Validates policy hash is not zero
+#[inline(always)]
+pub fn validate_policy_hash(policy_hash: [u8; 32]) -> Result<()> {
+    require!(policy_hash != [0u8; 32], MandateError::InvalidPolicyHash);
+    Ok(())
+}
+
+/// Validates allowed recipients/assets are within bounds
+#[inline(always)]
+pub fn validate_policy_constraints_count(count: usize, max: usize) -> Result<()> {
+    require!(count <= max, MandateError::MaxPolicyConstraintsExceeded);
+    Ok(())
+}

@@ -15,7 +15,7 @@ mandate = "EzScVWXcCYzcpLKhFg6U3uA1VugCnN3mLauqtb4MhNRg"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "devnet"
+cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

@@ -5,18 +5,19 @@ use anchor_spl::{
 };
 
 use crate::errors::MandateError;
-use crate::state::{Mandate, UNLIMITED_ALLOWANCE};
+use crate::events::MandateApprovedEvent;
+use crate::state::{Mandate, MandateStatus, UNLIMITED_ALLOWANCE};
 
 #[derive(Accounts)]
 #[instruction(mandate_id: u64)]
 pub struct ApproveMandate<'info> {
-    /// The user creating and approving the mandate - this account pays for the mandate creation/approval
+    /// The sender who approved the mandate - this account pays for the mandate creation/approval
     #[account(mut)]
-    pub user: Signer<'info>,
+    pub sender: Signer<'info>,
 
-    // // Authority is solely used for mandate validation and signing the delegate CPI.
-    // // It is NOT marked as payer so that the user covers the fees.
-    // pub authority: SystemAccount<'info>,
+    /// The recipient for this mandate
+    pub recipient: SystemAccount<'info>,
+
     /// The new mandate account to be created
     #[account(
         mut,
@@ -28,16 +29,16 @@ pub struct ApproveMandate<'info> {
     /// The token mint for the mandate
     pub mint: Account<'info, Mint>,
 
-    /// The user's token account that will be debited
+    /// The sender's token account that will be debited
     #[account(
         init_if_needed,
-        payer = user,
+        payer = sender,
         associated_token::mint = mint,
-        associated_token::authority = user,
+        associated_token::authority = sender,
         associated_token::token_program = token_program,
-        constraint = user_token_account.owner == user.key()
+        constraint = sender_token_account.owner == sender.key()
     )]
-    pub user_token_account: Account<'info, TokenAccount>,
+    pub sender_token_account: Account<'info, TokenAccount>,
 
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub token_program: Program<'info, Token>,
@@ -46,59 +47,66 @@ pub struct ApproveMandate<'info> {
 
 impl<'info> ApproveMandate<'info> {
     pub fn approve(&mut self) -> Result<()> {
-        // Validate that the user actually matches the mandate user
+        // Validate that the sender actually matches the mandate sender
         require!(
-            self.user.key() == self.mandate.user,
-            MandateError::UnauthorizedUser
+            self.sender.key() == self.mandate.sender,
+            MandateError::UnauthorizedSender
         );
+
+        // Validate recipient matches mandate recipient
+        require!(
+            self.recipient.key() == self.mandate.recipient,
+            MandateError::InvalidRecipient
+        );
+
         // Validate mandate state
-        // Fail early with clear errors for the two distinct states.
         require!(!self.mandate.is_approved, MandateError::AlreadyApproved);
-        require!(!self.mandate.is_active, MandateError::AlreadyActive);
+        require!(self.mandate.status == MandateStatus::Pending, MandateError::MandateNotPending);
 
         // Validate token account
         require!(
-            self.user_token_account.owner == self.user.key(),
+            self.sender_token_account.owner == self.sender.key(),
             MandateError::InvalidTokenAccount
         );
         require!(
-            self.user_token_account.mint == self.mint.key(),
+            self.sender_token_account.mint == self.mint.key(),
             MandateError::InvalidMint
         );
         require!(
-            self.user_token_account.delegate.is_none(),
+            self.sender_token_account.delegate.is_none(),
             MandateError::TokenAlreadyDelegated
         );
 
         // SECURITY FIX 1: Update the state BEFORE external call
         self.mandate.is_approved = true;
-        self.mandate.is_active = true;
-        self.mandate.updated_at = Clock::get()?.unix_timestamp;
+        self.mandate.status = MandateStatus::Active;
+        self.mandate.last_period_timestamp = Clock::get()?.unix_timestamp;
 
         // Approve token delegation
         let cpi_program = self.token_program.to_account_info();
         let cpi_accounts = Approve {
-            to: self.user_token_account.to_account_info(),
-            authority: self.user.to_account_info(),
+            to: self.sender_token_account.to_account_info(),
+            authority: self.sender.to_account_info(),
             delegate: self.mandate.to_account_info(),
         };
 
-        let amount = if self.mandate.is_unlimited_spend {
+        let amount = if self.mandate.policy.lifetime_limit == UNLIMITED_ALLOWANCE {
             UNLIMITED_ALLOWANCE
         } else {
-            self.mandate.limit
+            self.mandate.policy.lifetime_limit
         };
         approve(CpiContext::new(cpi_program, cpi_accounts), amount)?;
 
-        // SECURITY FIX 7: Emit approval event for monitoring
-        emit!(crate::events::MandateApprovedEvent {
+        // Emit approval event for monitoring
+        emit!(MandateApprovedEvent {
             mandate_id: self.mandate.id,
-            user: self.user.key(),
-            amount_per_debit: self.mandate.amount_per_debit,
-            is_approved: self.mandate.is_approved,
-            is_active: self.mandate.is_active,
+            sender: self.mandate.sender,
+            recipient: self.mandate.recipient,
+            mint: self.mandate.mint,
+            total_limit: self.mandate.policy.lifetime_limit,
+            per_execution_limit: self.mandate.policy.per_execution_limit,
+            policy_hash: self.mandate.policy_hash,
             created_at: self.mandate.created_at,
-            timestamp: self.mandate.updated_at,
         });
 
         Ok(())
