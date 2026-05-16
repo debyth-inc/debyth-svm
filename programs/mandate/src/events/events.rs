@@ -1,69 +1,95 @@
-use crate::state::DebitType;
 use anchor_lang::prelude::*;
 
 #[event]
 pub struct MandateCreatedEvent {
     pub mandate_id: u64,
-    pub user: Pubkey,
+    pub authority: Pubkey,
+    pub sender: Pubkey,
+    pub recipient: Pubkey,
     pub mint: Pubkey,
-    pub is_approved: bool,
-    pub is_active: bool,
+    pub authorized_limit: u64,
+    pub charge_type: u8,
+    pub start_at: i64,
+    pub end_at: i64,
+    pub policy_hash: [u8; 32],
     pub created_at: i64,
-    pub amount_per_debit: u64,
-    pub limit: u64,
-    pub is_unlimited_spend: bool,
-    pub debit_type: DebitType,
-    pub debit_frequency_seconds: u64,
+}
+
+#[event]
+pub struct MandateExecutedEvent {
+    pub mandate_id: u64,
+    pub sender: Pubkey,
+    pub recipient: Pubkey,
+    pub mint: Pubkey,
+    pub amount: u64,
+    pub total_executed: u64,
+    pub timestamp: i64,
+    pub nonce: u64,
+    pub policy_hash: [u8; 32],
+}
+
+#[event]
+pub struct MandateCancelledEvent {
+    pub mandate_id: u64,
+    pub sender: Pubkey,
+    pub cancelled_by: Pubkey,
     pub timestamp: i64,
 }
 
 #[event]
 pub struct MandateApprovedEvent {
     pub mandate_id: u64,
-    pub user: Pubkey,
-    pub amount_per_debit: u64,
-    pub is_approved: bool,
-    pub is_active: bool,
+    pub sender: Pubkey,
+    pub recipient: Pubkey,
+    pub mint: Pubkey,
+    pub authorized_limit: u64,
+    pub per_execution_limit: u64,
+    pub policy_hash: [u8; 32],
     pub created_at: i64,
+}
+
+#[event]
+pub struct MandatePausedEvent {
+    pub mandate_id: u64,
+    pub sender: Pubkey,
+    pub paused_by: Pubkey,
     pub timestamp: i64,
 }
 
 #[event]
-pub struct MandateExecutedEvent {
+pub struct MandateResumedEvent {
     pub mandate_id: u64,
-    pub authority: Pubkey,
-    pub user: Pubkey,
-    pub amount_per_debit: u64,
-    pub amount_debited: u64, // Actual amount transferred in this execution
-    pub total_debited_amount: u64,
+    pub sender: Pubkey,
+    pub resumed_by: Pubkey,
     pub timestamp: i64,
 }
 
 #[event]
 pub struct MandateModifiedEvent {
     pub mandate_id: u64,
-    pub authority: Pubkey,
-    pub user: Pubkey,
-    pub new_amount_per_debit: u64,
-    pub new_limit: u64,
-    pub new_is_unlimited_spend: bool,
-    pub new_debit_type: DebitType,
+    pub sender: Pubkey,
+    pub old_policy_hash: [u8; 32],
+    pub new_policy_hash: [u8; 32],
+    pub modified_by: Pubkey,
     pub timestamp: i64,
 }
 
 #[event]
-pub struct MandateCancelledEvent {
-    pub mandate_id: u64,
-    pub authority: Pubkey,
-    pub user: Pubkey,
+pub struct ExecutionPausedEvent {
+    pub paused_by: Pubkey,
     pub timestamp: i64,
 }
 
 #[event]
-pub struct MandateStatusToggledEvent {
+pub struct ExecutionResumedEvent {
+    pub resumed_by: Pubkey,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct MandateEmergencyCancelledEvent {
     pub mandate_id: u64,
-    pub authority: Pubkey,
-    pub user: Pubkey,
-    pub is_active: bool,
+    pub sender: Pubkey,
+    pub cancelled_by: Pubkey,
     pub timestamp: i64,
 }

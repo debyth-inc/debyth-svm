@@ -1,5 +1,5 @@
 import * as anchor from "@coral-xyz/anchor";
-import { Keypair } from "@solana/web3.js";
+import { Keypair, SystemProgram } from "@solana/web3.js";
 import { expect } from "chai";
 import { TestFactory, TestContext } from "./test-factory";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
@@ -14,11 +14,9 @@ describe("Mandate Status Toggle (Pause/Unpause)", () => {
     });
 
     it("toggles mandate status successfully (pause then unpause)", async () => {
-        // Initially mandate should be active
         let mandate = await context.program.account.mandate.fetch(context.mandatePda);
-        expect(mandate.isActive).to.be.true;
+        expect(mandate.status).to.deep.equal({ active: {} });
 
-        // Pause the mandate
         await context.program.methods
             .toggleStatus()
             .accountsPartial({
@@ -29,9 +27,8 @@ describe("Mandate Status Toggle (Pause/Unpause)", () => {
             .rpc();
 
         mandate = await context.program.account.mandate.fetch(context.mandatePda);
-        expect(mandate.isActive).to.be.false;
+        expect(mandate.status).to.deep.equal({ paused: {} });
 
-        // Unpause the mandate
         await context.program.methods
             .toggleStatus()
             .accountsPartial({
@@ -42,7 +39,7 @@ describe("Mandate Status Toggle (Pause/Unpause)", () => {
             .rpc();
 
         mandate = await context.program.account.mandate.fetch(context.mandatePda);
-        expect(mandate.isActive).to.be.true;
+        expect(mandate.status).to.deep.equal({ active: {} });
     });
 
     it("rejects toggle by non-authority user", async () => {
@@ -64,7 +61,6 @@ describe("Mandate Status Toggle (Pause/Unpause)", () => {
 
             expect.fail("Should have rejected non-authority toggle");
         } catch (error) {
-            // PDA seeds constraint fails first (seeds include authority)
             expect(error.error.errorCode.code).to.equal("ConstraintSeeds");
         }
     });
@@ -90,7 +86,8 @@ describe("Mandate Status Toggle (Pause/Unpause)", () => {
     });
 
     it("prevents execution when mandate is paused", async () => {
-        // Pause the mandate
+        await testFactory.initializeExecutionState(context);
+
         await context.program.methods
             .toggleStatus()
             .accountsPartial({
@@ -100,20 +97,21 @@ describe("Mandate Status Toggle (Pause/Unpause)", () => {
             .signers([context.authority])
             .rpc();
 
-        // Try to execute - should fail because mandate is paused
         try {
             await context.program.methods
                 .executeMandate({
                     amountToDebit: new anchor.BN(100_000),
+                    nonce: new anchor.BN(1),
                 })
                 .accountsPartial({
                     authority: context.authority.publicKey,
-                    user: context.user.publicKey,
                     mandate: context.mandatePda,
+                    executionState: context.executionStatePda,
                     mint: context.mint,
-                    userTokenAccount: context.userTokenAccount,
-                    authorityTokenAccount: context.authorityTokenAccount,
+                    senderTokenAccount: context.senderTokenAccount,
+                    recipientTokenAccount: context.recipientTokenAccount,
                     tokenProgram: TOKEN_PROGRAM_ID,
+                    systemProgram: SystemProgram.programId,
                 })
                 .signers([context.authority])
                 .rpc();

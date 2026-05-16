@@ -1,8 +1,8 @@
 import * as anchor from "@coral-xyz/anchor";
-import { Keypair } from "@solana/web3.js";
+import { Keypair, SystemProgram } from "@solana/web3.js";
 import { expect } from "chai";
 import { TestFactory, TestContext } from "./test-factory";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 describe("Mandate Modification", () => {
     const testFactory = TestFactory.getInstance();
@@ -17,34 +17,46 @@ describe("Mandate Modification", () => {
         const NEW_AMOUNT_PER_DEBIT = new anchor.BN(200_000);
         const NEW_LIMIT = new anchor.BN(2_000_000);
         const UNLIMITED_LIMIT_U64_MAX = new anchor.BN("18446744073709551615");
+        const SIGNATURE_NONCE = new anchor.BN(1);
+
+        const now = Math.floor(Date.now() / 1000);
+        const newPolicyHash = Array(32).fill(0).map((_, i) => (i === 0 ? 2 : 0));
 
         await context.program.methods
             .modifyMandate({
                 newAmountPerDebit: NEW_AMOUNT_PER_DEBIT,
-                newLimit: NEW_LIMIT,
+                newTotalLimit: NEW_LIMIT,
                 newIsUnlimitedSpend: true,
-                newDebitType: { variable: {} },
-                newDebitFrequencySeconds: new anchor.BN(60),
+                newChargeType: { variable: {} },
+                newFrequency: { daily: {} },
+                newMinIntervalSeconds: new anchor.BN(60),
+                newStartAt: new anchor.BN(now - 3600),
+                newEndAt: new anchor.BN(now + 365 * 86400),
+                newAllowedRecipients: [],
+                newAllowedAssets: [],
+                newPolicyHash,
+                signatureNonce: SIGNATURE_NONCE,
             })
             .accountsPartial({
                 authority: context.authority.publicKey,
-                user: context.user.publicKey,
+                sender: context.sender.publicKey,
+                recipient: context.recipient.publicKey,
                 mandate: context.mandatePda,
                 mint: context.mint,
-                userTokenAccount: context.userTokenAccount,
-                associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
+                senderTokenAccount: context.senderTokenAccount,
+                associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
                 tokenProgram: TOKEN_PROGRAM_ID,
-                systemProgram: anchor.web3.SystemProgram.programId,
+                systemProgram: SystemProgram.programId,
             })
-            .signers([context.authority, context.user])
+            .signers([context.authority, context.sender])
             .rpc();
 
         const mandate = await context.program.account.mandate.fetch(context.mandatePda);
 
-        expect(mandate.amountPerDebit.toString()).to.equal(NEW_AMOUNT_PER_DEBIT.toString());
-        expect(mandate.limit.toString()).to.equal(UNLIMITED_LIMIT_U64_MAX.toString());
-        expect(mandate.isUnlimitedSpend).to.be.true;
-        expect(mandate.debitType).to.deep.equal({ variable: {} });
+        expect(mandate.policy.perExecutionLimit.toString()).to.equal(NEW_AMOUNT_PER_DEBIT.toString());
+        expect(mandate.policy.lifetimeLimit.toString()).to.equal(UNLIMITED_LIMIT_U64_MAX.toString());
+        expect(mandate.policy.chargeType).to.deep.equal({ variable: {} });
+        expect(mandate.modifySignatureNonce.toString()).to.equal(SIGNATURE_NONCE.toString());
     });
 
     it("rejects modification by non-authority user", async () => {
@@ -54,31 +66,42 @@ describe("Mandate Modification", () => {
             anchor.web3.LAMPORTS_PER_SOL
         );
 
+        const now = Math.floor(Date.now() / 1000);
+        const newPolicyHash = Array(32).fill(0).map((_, i) => (i === 0 ? 2 : 0));
+        const SIGNATURE_NONCE = new anchor.BN(1);
+
         try {
             await context.program.methods
                 .modifyMandate({
                     newAmountPerDebit: new anchor.BN(200_000),
-                    newLimit: new anchor.BN(2_000_000),
+                    newTotalLimit: new anchor.BN(2_000_000),
                     newIsUnlimitedSpend: true,
-                    newDebitType: { variable: {} },
-                    newDebitFrequencySeconds: new anchor.BN(60),
+                    newChargeType: { variable: {} },
+                    newFrequency: { daily: {} },
+                    newMinIntervalSeconds: new anchor.BN(60),
+                    newStartAt: new anchor.BN(now - 3600),
+                    newEndAt: new anchor.BN(now + 365 * 86400),
+                    newAllowedRecipients: [],
+                    newAllowedAssets: [],
+                    newPolicyHash,
+                    signatureNonce: SIGNATURE_NONCE,
                 })
                 .accountsPartial({
                     authority: unauthorizedUser.publicKey,
-                    user: context.user.publicKey,
+                    sender: context.sender.publicKey,
+                    recipient: context.recipient.publicKey,
                     mandate: context.mandatePda,
                     mint: context.mint,
-                    userTokenAccount: context.userTokenAccount,
-                    associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
+                    senderTokenAccount: context.senderTokenAccount,
+                    associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
                     tokenProgram: TOKEN_PROGRAM_ID,
-                    systemProgram: anchor.web3.SystemProgram.programId,
+                    systemProgram: SystemProgram.programId,
                 })
-                .signers([unauthorizedUser, context.user])
+                .signers([unauthorizedUser, context.sender])
                 .rpc();
 
             expect.fail("Should have rejected non-authority modification");
         } catch (error) {
-            // PDA seeds constraint fails first (seeds include authority)
             expect(error.error.errorCode.code).to.equal("ConstraintSeeds");
         }
     });
@@ -87,26 +110,38 @@ describe("Mandate Modification", () => {
         const unapprovedContext = await testFactory.createTestContext();
         await testFactory.createMandate(unapprovedContext);
 
+        const now = Math.floor(Date.now() / 1000);
+        const newPolicyHash = Array(32).fill(0).map((_, i) => (i === 0 ? 2 : 0));
+        const SIGNATURE_NONCE = new anchor.BN(1);
+
         try {
             await unapprovedContext.program.methods
                 .modifyMandate({
                     newAmountPerDebit: new anchor.BN(200_000),
-                    newLimit: new anchor.BN(2_000_000),
+                    newTotalLimit: new anchor.BN(2_000_000),
                     newIsUnlimitedSpend: false,
-                    newDebitType: { fixed: {} },
-                    newDebitFrequencySeconds: new anchor.BN(60),
+                    newChargeType: { fixed: {} },
+                    newFrequency: { daily: {} },
+                    newMinIntervalSeconds: new anchor.BN(60),
+                    newStartAt: new anchor.BN(now - 3600),
+                    newEndAt: new anchor.BN(now + 365 * 86400),
+                    newAllowedRecipients: [],
+                    newAllowedAssets: [],
+                    newPolicyHash,
+                    signatureNonce: SIGNATURE_NONCE,
                 })
                 .accountsPartial({
                     authority: unapprovedContext.authority.publicKey,
-                    user: unapprovedContext.user.publicKey,
+                    sender: unapprovedContext.sender.publicKey,
+                    recipient: unapprovedContext.recipient.publicKey,
                     mandate: unapprovedContext.mandatePda,
                     mint: unapprovedContext.mint,
-                    userTokenAccount: unapprovedContext.userTokenAccount,
-                    associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
+                    senderTokenAccount: unapprovedContext.senderTokenAccount,
+                    associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
                     tokenProgram: TOKEN_PROGRAM_ID,
-                    systemProgram: anchor.web3.SystemProgram.programId,
+                    systemProgram: SystemProgram.programId,
                 })
-                .signers([unapprovedContext.authority, unapprovedContext.user])
+                .signers([unapprovedContext.authority, unapprovedContext.sender])
                 .rpc();
 
             expect.fail("Should have rejected modification of unapproved mandate");
@@ -116,26 +151,38 @@ describe("Mandate Modification", () => {
     });
 
     it("rejects modification with zero amount_per_debit", async () => {
+        const now = Math.floor(Date.now() / 1000);
+        const newPolicyHash = Array(32).fill(0).map((_, i) => (i === 0 ? 2 : 0));
+        const SIGNATURE_NONCE = new anchor.BN(1);
+
         try {
             await context.program.methods
                 .modifyMandate({
                     newAmountPerDebit: new anchor.BN(0),
-                    newLimit: new anchor.BN(1_000_000),
+                    newTotalLimit: new anchor.BN(1_000_000),
                     newIsUnlimitedSpend: false,
-                    newDebitType: { fixed: {} },
-                    newDebitFrequencySeconds: new anchor.BN(60),
+                    newChargeType: { fixed: {} },
+                    newFrequency: { daily: {} },
+                    newMinIntervalSeconds: new anchor.BN(60),
+                    newStartAt: new anchor.BN(now - 3600),
+                    newEndAt: new anchor.BN(now + 365 * 86400),
+                    newAllowedRecipients: [],
+                    newAllowedAssets: [],
+                    newPolicyHash,
+                    signatureNonce: SIGNATURE_NONCE,
                 })
                 .accountsPartial({
                     authority: context.authority.publicKey,
-                    user: context.user.publicKey,
+                    sender: context.sender.publicKey,
+                    recipient: context.recipient.publicKey,
                     mandate: context.mandatePda,
                     mint: context.mint,
-                    userTokenAccount: context.userTokenAccount,
-                    associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
+                    senderTokenAccount: context.senderTokenAccount,
+                    associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
                     tokenProgram: TOKEN_PROGRAM_ID,
-                    systemProgram: anchor.web3.SystemProgram.programId,
+                    systemProgram: SystemProgram.programId,
                 })
-                .signers([context.authority, context.user])
+                .signers([context.authority, context.sender])
                 .rpc();
 
             expect.fail("Should have rejected zero amount_per_debit");
@@ -145,31 +192,118 @@ describe("Mandate Modification", () => {
     });
 
     it("rejects modification with limit less than amount_per_debit", async () => {
+        const now = Math.floor(Date.now() / 1000);
+        const newPolicyHash = Array(32).fill(0).map((_, i) => (i === 0 ? 2 : 0));
+        const SIGNATURE_NONCE = new anchor.BN(1);
+
         try {
             await context.program.methods
                 .modifyMandate({
                     newAmountPerDebit: new anchor.BN(1_000_000),
-                    newLimit: new anchor.BN(500_000), // Less than amount_per_debit
+                    newTotalLimit: new anchor.BN(500_000),
                     newIsUnlimitedSpend: false,
-                    newDebitType: { fixed: {} },
-                    newDebitFrequencySeconds: new anchor.BN(60),
+                    newChargeType: { fixed: {} },
+                    newFrequency: { daily: {} },
+                    newMinIntervalSeconds: new anchor.BN(60),
+                    newStartAt: new anchor.BN(now - 3600),
+                    newEndAt: new anchor.BN(now + 365 * 86400),
+                    newAllowedRecipients: [],
+                    newAllowedAssets: [],
+                    newPolicyHash,
+                    signatureNonce: SIGNATURE_NONCE,
                 })
                 .accountsPartial({
                     authority: context.authority.publicKey,
-                    user: context.user.publicKey,
+                    sender: context.sender.publicKey,
+                    recipient: context.recipient.publicKey,
                     mandate: context.mandatePda,
                     mint: context.mint,
-                    userTokenAccount: context.userTokenAccount,
-                    associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
+                    senderTokenAccount: context.senderTokenAccount,
+                    associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
                     tokenProgram: TOKEN_PROGRAM_ID,
-                    systemProgram: anchor.web3.SystemProgram.programId,
+                    systemProgram: SystemProgram.programId,
                 })
-                .signers([context.authority, context.user])
+                .signers([context.authority, context.sender])
                 .rpc();
 
             expect.fail("Should have rejected limit less than amount_per_debit");
         } catch (error) {
             expect(error.error.errorCode.code).to.equal("InvalidSpendCap");
+        }
+    });
+
+    it("rejects modification with reused signature nonce", async () => {
+        const NEW_AMOUNT_PER_DEBIT = new anchor.BN(200_000);
+        const NEW_LIMIT = new anchor.BN(2_000_000);
+        const SIGNATURE_NONCE = new anchor.BN(1);
+
+        const now = Math.floor(Date.now() / 1000);
+        const newPolicyHash = Array(32).fill(0).map((_, i) => (i === 0 ? 2 : 0));
+
+        await context.program.methods
+            .modifyMandate({
+                newAmountPerDebit: NEW_AMOUNT_PER_DEBIT,
+                newTotalLimit: NEW_LIMIT,
+                newIsUnlimitedSpend: true,
+                newChargeType: { variable: {} },
+                newFrequency: { daily: {} },
+                newMinIntervalSeconds: new anchor.BN(60),
+                newStartAt: new anchor.BN(now - 3600),
+                newEndAt: new anchor.BN(now + 365 * 86400),
+                newAllowedRecipients: [],
+                newAllowedAssets: [],
+                newPolicyHash,
+                signatureNonce: SIGNATURE_NONCE,
+            })
+            .accountsPartial({
+                authority: context.authority.publicKey,
+                sender: context.sender.publicKey,
+                recipient: context.recipient.publicKey,
+                mandate: context.mandatePda,
+                mint: context.mint,
+                senderTokenAccount: context.senderTokenAccount,
+                associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+                tokenProgram: TOKEN_PROGRAM_ID,
+                systemProgram: SystemProgram.programId,
+            })
+            .signers([context.authority, context.sender])
+            .rpc();
+
+        const newPolicyHash2 = Array(32).fill(0).map((_, i) => (i === 0 ? 3 : 0));
+
+        try {
+            await context.program.methods
+                .modifyMandate({
+                    newAmountPerDebit: NEW_AMOUNT_PER_DEBIT,
+                    newTotalLimit: NEW_LIMIT,
+                    newIsUnlimitedSpend: true,
+                    newChargeType: { variable: {} },
+                    newFrequency: { daily: {} },
+                    newMinIntervalSeconds: new anchor.BN(60),
+                    newStartAt: new anchor.BN(now - 3600),
+                    newEndAt: new anchor.BN(now + 365 * 86400),
+                    newAllowedRecipients: [],
+                    newAllowedAssets: [],
+                    newPolicyHash: newPolicyHash2,
+                    signatureNonce: SIGNATURE_NONCE,
+                })
+                .accountsPartial({
+                    authority: context.authority.publicKey,
+                    sender: context.sender.publicKey,
+                    recipient: context.recipient.publicKey,
+                    mandate: context.mandatePda,
+                    mint: context.mint,
+                    senderTokenAccount: context.senderTokenAccount,
+                    associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    systemProgram: SystemProgram.programId,
+                })
+                .signers([context.authority, context.sender])
+                .rpc();
+
+            expect.fail("Should have rejected reused nonce");
+        } catch (error) {
+            expect(error.error.errorCode.code).to.equal("SignatureNonceAlreadyUsed");
         }
     });
 });
@@ -183,20 +317,18 @@ describe("Mandate Cancellation", () => {
         await testFactory.createApprovedFixedMandate(context);
     });
 
-    it("allows authority to cancel mandate (without user signature)", async () => {
-        // Authority can cancel mandate without user signature
-        // Note: Delegation is not explicitly revoked (only owner can revoke), but the
-        // mandate PDA is closed, making any remaining delegation to it useless
+    it("allows authority to cancel mandate (without sender signature)", async () => {
         await context.program.methods
             .cancelMandate()
             .accountsPartial({
                 authority: context.authority.publicKey,
-                user: context.user.publicKey,
+                sender: context.sender.publicKey,
+                recipient: context.recipient.publicKey,
                 mandate: context.mandatePda,
                 mint: context.mint,
-                userTokenAccount: context.userTokenAccount,
+                senderTokenAccount: context.senderTokenAccount,
                 tokenProgram: TOKEN_PROGRAM_ID,
-                systemProgram: anchor.web3.SystemProgram.programId,
+                systemProgram: SystemProgram.programId,
             })
             .signers([context.authority])
             .rpc();
@@ -209,30 +341,53 @@ describe("Mandate Cancellation", () => {
         }
     });
 
-    it("allows authority to cancel after user revoked delegation externally", async () => {
-        // User revokes delegation via wallet (simulated)
+    it("allows sender to cancel mandate", async () => {
+        await context.program.methods
+            .senderCancelMandate()
+            .accountsPartial({
+                sender: context.sender.publicKey,
+                authority: context.authority.publicKey,
+                recipient: context.recipient.publicKey,
+                mandate: context.mandatePda,
+                mint: context.mint,
+                senderTokenAccount: context.senderTokenAccount,
+                tokenProgram: TOKEN_PROGRAM_ID,
+                systemProgram: SystemProgram.programId,
+            })
+            .signers([context.sender])
+            .rpc();
+
+        try {
+            await context.program.account.mandate.fetch(context.mandatePda);
+            expect.fail("Mandate account should have been closed");
+        } catch (error) {
+            expect(error.message).to.include("Account does not exist");
+        }
+    });
+
+    it("allows authority to cancel after sender revoked delegation externally", async () => {
         const { revoke } = await import("@solana/spl-token");
         await revoke(
             testFactory.getConnection(),
-            context.user,
-            context.userTokenAccount,
-            context.user,
+            context.sender,
+            context.senderTokenAccount,
+            context.sender.publicKey,
             [],
             undefined,
             TOKEN_PROGRAM_ID
         );
 
-        // Authority can now cancel without user signature
         await context.program.methods
             .cancelMandate()
             .accountsPartial({
                 authority: context.authority.publicKey,
-                user: context.user.publicKey,
+                sender: context.sender.publicKey,
+                recipient: context.recipient.publicKey,
                 mandate: context.mandatePda,
                 mint: context.mint,
-                userTokenAccount: context.userTokenAccount,
+                senderTokenAccount: context.senderTokenAccount,
                 tokenProgram: TOKEN_PROGRAM_ID,
-                systemProgram: anchor.web3.SystemProgram.programId,
+                systemProgram: SystemProgram.programId,
             })
             .signers([context.authority])
             .rpc();
@@ -257,19 +412,19 @@ describe("Mandate Cancellation", () => {
                 .cancelMandate()
                 .accountsPartial({
                     authority: unauthorizedAuthority.publicKey,
-                    user: context.user.publicKey,
+                    sender: context.sender.publicKey,
+                    recipient: context.recipient.publicKey,
                     mandate: context.mandatePda,
                     mint: context.mint,
-                    userTokenAccount: context.userTokenAccount,
+                    senderTokenAccount: context.senderTokenAccount,
                     tokenProgram: TOKEN_PROGRAM_ID,
-                    systemProgram: anchor.web3.SystemProgram.programId,
+                    systemProgram: SystemProgram.programId,
                 })
                 .transaction();
 
             tx.feePayer = unauthorizedAuthority.publicKey;
             const { blockhash } = await context.program.provider.connection.getLatestBlockhash();
             tx.recentBlockhash = blockhash;
-            // Only unauthorized authority signs - user signature not needed since this will fail on PDA constraint
             tx.sign(unauthorizedAuthority);
 
             await context.program.provider.connection.sendRawTransaction(tx.serialize());
@@ -280,5 +435,3 @@ describe("Mandate Cancellation", () => {
         }
     });
 });
-
-

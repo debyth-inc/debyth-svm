@@ -15,7 +15,9 @@
         "test:approve": "anchor test tests/approve-mandate.test.ts",
         "test:execute": "anchor test tests/execute-mandate.test.ts",
         "test:modify-cancel": "anchor test tests/modify-cancel-mandate.test.ts",
-        "test:security": "anchor test tests/security-edge-cases.test.ts"
+        "test:security": "anchor test tests/security-edge-cases.test.ts",
+        "test:toggle": "anchor test tests/toggle-status.test.ts",
+        "test:pause": "anchor test tests/execution-pause.test.ts"
     },
     "dependencies": {
         "@coral-xyz/anchor": "0.31.1",

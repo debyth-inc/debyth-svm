@@ -1,8 +1,8 @@
 import * as anchor from "@coral-xyz/anchor";
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import { expect } from "chai";
 import { TestFactory, TestContext } from "./test-factory";
-import { TOKEN_PROGRAM_ID, freezeAccount, thawAccount } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, freezeAccount, thawAccount } from "@solana/spl-token";
 
 describe("Security: Modify Mandate Edge Cases", () => {
     const testFactory = TestFactory.getInstance();
@@ -12,27 +12,29 @@ describe("Security: Modify Mandate Edge Cases", () => {
         context = await testFactory.createTestContext();
         await testFactory.createApprovedFixedMandate(context, {
             amountPerDebit: new anchor.BN(100_000),
-            limit: new anchor.BN(1_000_000),
-            debitFrequencySeconds: new anchor.BN(1),
+            totalLimit: new anchor.BN(1_000_000),
+            minIntervalSeconds: new anchor.BN(1),
         });
     });
 
-    it("rejects limit reduction below total_debited_amount", async () => {
+    it("rejects limit reduction below total_executed", async () => {
         const DEBIT_AMOUNT = new anchor.BN(100_000);
         const DELAY_MS = 1500;
 
-        // Execute 5 debits to reach 500k total
+        await testFactory.initializeExecutionState(context);
+
         for (let i = 0; i < 5; i++) {
             await context.program.methods
-                .executeMandate({ amountToDebit: DEBIT_AMOUNT })
+                .executeMandate({ amountToDebit: DEBIT_AMOUNT, nonce: new anchor.BN(i + 1) })
                 .accountsPartial({
                     authority: context.authority.publicKey,
                     mandate: context.mandatePda,
+                    executionState: context.executionStatePda,
                     mint: context.mint,
-                    userTokenAccount: context.userTokenAccount,
-                    destinationTokenAccount: context.authorityTokenAccount,
+                    senderTokenAccount: context.senderTokenAccount,
+                    recipientTokenAccount: context.recipientTokenAccount,
                     tokenProgram: TOKEN_PROGRAM_ID,
-                    systemProgram: anchor.web3.SystemProgram.programId,
+                    systemProgram: SystemProgram.programId,
                 })
                 .signers([context.authority])
                 .rpc();
@@ -41,73 +43,83 @@ describe("Security: Modify Mandate Edge Cases", () => {
         }
 
         const mandate = await context.program.account.mandate.fetch(context.mandatePda);
-        expect(mandate.totalDebitedAmount.toString()).to.equal("500000");
+        expect(mandate.totalExecuted.toString()).to.equal("500000");
 
-        // Try to reduce limit to 300k (below 500k debited)
+        const now = Math.floor(Date.now() / 1000);
+        const newPolicyHash = Array(32).fill(0).map((_, i) => (i === 0 ? 2 : 0));
+        const SIGNATURE_NONCE = new anchor.BN(1);
+
         try {
             await context.program.methods
                 .modifyMandate({
                     newAmountPerDebit: new anchor.BN(100_000),
-                    newLimit: new anchor.BN(300_000), // Less than total_debited_amount
+                    newTotalLimit: new anchor.BN(300_000),
                     newIsUnlimitedSpend: false,
-                    newDebitType: { fixed: {} },
-                    newDebitFrequencySeconds: new anchor.BN(1),
+                    newChargeType: { fixed: {} },
+                    newFrequency: { daily: {} },
+                    newMinIntervalSeconds: new anchor.BN(1),
+                    newStartAt: new anchor.BN(now - 3600),
+                    newEndAt: new anchor.BN(now + 365 * 86400),
+                    newAllowedRecipients: [],
+                    newAllowedAssets: [],
+                    newPolicyHash,
+                    signatureNonce: SIGNATURE_NONCE,
                 })
                 .accountsPartial({
                     authority: context.authority.publicKey,
-                    user: context.user.publicKey,
+                    sender: context.sender.publicKey,
+                    recipient: context.recipient.publicKey,
                     mandate: context.mandatePda,
                     mint: context.mint,
-                    userTokenAccount: context.userTokenAccount,
-                    associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
+                    senderTokenAccount: context.senderTokenAccount,
+                    associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
                     tokenProgram: TOKEN_PROGRAM_ID,
-                    systemProgram: anchor.web3.SystemProgram.programId,
+                    systemProgram: SystemProgram.programId,
                 })
-                .signers([context.authority, context.user])
+                .signers([context.authority, context.sender])
                 .rpc();
 
-            expect.fail("Should have rejected limit reduction below total_debited_amount");
+            expect.fail("Should have rejected limit reduction below total_executed");
         } catch (error) {
             expect(error.error.errorCode.code).to.equal("InvalidSpendCap");
         }
     });
 
     it("handles transition from unlimited to limited spend with validation", async () => {
-        // Create unlimited mandate
         const unlimitedContext = await testFactory.createTestContext();
 
-        // Mint additional tokens to user for this test (need 1.5M total, initial is 1M)
         const { mintTo } = await import("@solana/spl-token");
         await mintTo(
             testFactory.getConnection(),
             unlimitedContext.authority,
             unlimitedContext.mint,
-            unlimitedContext.userTokenAccount,
+            unlimitedContext.senderTokenAccount,
             unlimitedContext.authority,
-            1_000_000 // Additional 1M tokens (now has 2M total)
+            1_000_000
         );
 
         await testFactory.createApprovedUnlimitedMandate(unlimitedContext, {
-            amountPerDebit: new anchor.BN(500_000), // Max per debit
-            debitType: { variable: {} },
-            debitFrequencySeconds: new anchor.BN(1),
+            amountPerDebit: new anchor.BN(500_000),
+            chargeType: { variable: {} },
+            minIntervalSeconds: new anchor.BN(1),
         });
+        await testFactory.initializeExecutionState(unlimitedContext);
 
-        // Execute several large debits
         const LARGE_DEBIT = new anchor.BN(500_000);
-        const DELAY_MS = 2000; // Increased delay to ensure frequency check passes
+        const DELAY_MS = 2000;
 
         for (let i = 0; i < 3; i++) {
             await unlimitedContext.program.methods
-                .executeMandate({ amountToDebit: LARGE_DEBIT })
+                .executeMandate({ amountToDebit: LARGE_DEBIT, nonce: new anchor.BN(i + 1) })
                 .accountsPartial({
                     authority: unlimitedContext.authority.publicKey,
                     mandate: unlimitedContext.mandatePda,
+                    executionState: unlimitedContext.executionStatePda,
                     mint: unlimitedContext.mint,
-                    userTokenAccount: unlimitedContext.userTokenAccount,
-                    destinationTokenAccount: unlimitedContext.authorityTokenAccount,
+                    senderTokenAccount: unlimitedContext.senderTokenAccount,
+                    recipientTokenAccount: unlimitedContext.recipientTokenAccount,
                     tokenProgram: TOKEN_PROGRAM_ID,
-                    systemProgram: anchor.web3.SystemProgram.programId,
+                    systemProgram: SystemProgram.programId,
                 })
                 .signers([unlimitedContext.authority])
                 .rpc();
@@ -115,33 +127,43 @@ describe("Security: Modify Mandate Edge Cases", () => {
             await new Promise(resolve => setTimeout(resolve, DELAY_MS));
         }
 
-        // Total debited should be 1.5M now
         const mandateBefore = await unlimitedContext.program.account.mandate.fetch(
             unlimitedContext.mandatePda
         );
-        expect(mandateBefore.totalDebitedAmount.toString()).to.equal("1500000");
+        expect(mandateBefore.totalExecuted.toString()).to.equal("1500000");
 
-        // Try to modify to limited with limit less than debited amount
+        const now = Math.floor(Date.now() / 1000);
+        const newPolicyHash = Array(32).fill(0).map((_, i) => (i === 0 ? 2 : 0));
+        const SIGNATURE_NONCE = new anchor.BN(1);
+
         try {
             await unlimitedContext.program.methods
                 .modifyMandate({
                     newAmountPerDebit: new anchor.BN(100_000),
-                    newLimit: new anchor.BN(1_000_000), // Less than 1.5M debited
+                    newTotalLimit: new anchor.BN(1_000_000),
                     newIsUnlimitedSpend: false,
-                    newDebitType: { variable: {} },
-                    newDebitFrequencySeconds: new anchor.BN(1),
+                    newChargeType: { variable: {} },
+                    newFrequency: { daily: {} },
+                    newMinIntervalSeconds: new anchor.BN(1),
+                    newStartAt: new anchor.BN(now - 3600),
+                    newEndAt: new anchor.BN(now + 365 * 86400),
+                    newAllowedRecipients: [],
+                    newAllowedAssets: [],
+                    newPolicyHash,
+                    signatureNonce: SIGNATURE_NONCE,
                 })
                 .accountsPartial({
                     authority: unlimitedContext.authority.publicKey,
-                    user: unlimitedContext.user.publicKey,
+                    sender: unlimitedContext.sender.publicKey,
+                    recipient: unlimitedContext.recipient.publicKey,
                     mandate: unlimitedContext.mandatePda,
                     mint: unlimitedContext.mint,
-                    userTokenAccount: unlimitedContext.userTokenAccount,
-                    associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
+                    senderTokenAccount: unlimitedContext.senderTokenAccount,
+                    associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
                     tokenProgram: TOKEN_PROGRAM_ID,
-                    systemProgram: anchor.web3.SystemProgram.programId,
+                    systemProgram: SystemProgram.programId,
                 })
-                .signers([unlimitedContext.authority, unlimitedContext.user])
+                .signers([unlimitedContext.authority, unlimitedContext.sender])
                 .rpc();
 
             expect.fail("Should have rejected unlimited to limited with insufficient limit");
@@ -149,33 +171,42 @@ describe("Security: Modify Mandate Edge Cases", () => {
             expect(error.error.errorCode.code).to.equal("InvalidSpendCap");
         }
 
-        // Should succeed with higher limit
+        const newPolicyHash2 = Array(32).fill(0).map((_, i) => (i === 0 ? 3 : 0));
+        const SIGNATURE_NONCE2 = new anchor.BN(2);
+
         await unlimitedContext.program.methods
             .modifyMandate({
                 newAmountPerDebit: new anchor.BN(100_000),
-                newLimit: new anchor.BN(2_000_000), // Greater than 1.5M debited
+                newTotalLimit: new anchor.BN(2_000_000),
                 newIsUnlimitedSpend: false,
-                newDebitType: { variable: {} },
-                newDebitFrequencySeconds: new anchor.BN(1),
+                newChargeType: { variable: {} },
+                newFrequency: { daily: {} },
+                newMinIntervalSeconds: new anchor.BN(1),
+                newStartAt: new anchor.BN(now - 3600),
+                newEndAt: new anchor.BN(now + 365 * 86400),
+                newAllowedRecipients: [],
+                newAllowedAssets: [],
+                newPolicyHash: newPolicyHash2,
+                signatureNonce: SIGNATURE_NONCE2,
             })
             .accountsPartial({
                 authority: unlimitedContext.authority.publicKey,
-                user: unlimitedContext.user.publicKey,
+                sender: unlimitedContext.sender.publicKey,
+                recipient: unlimitedContext.recipient.publicKey,
                 mandate: unlimitedContext.mandatePda,
                 mint: unlimitedContext.mint,
-                userTokenAccount: unlimitedContext.userTokenAccount,
-                associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
+                senderTokenAccount: unlimitedContext.senderTokenAccount,
+                associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
                 tokenProgram: TOKEN_PROGRAM_ID,
-                systemProgram: anchor.web3.SystemProgram.programId,
+                systemProgram: SystemProgram.programId,
             })
-            .signers([unlimitedContext.authority, unlimitedContext.user])
+            .signers([unlimitedContext.authority, unlimitedContext.sender])
             .rpc();
 
         const mandateAfter = await unlimitedContext.program.account.mandate.fetch(
             unlimitedContext.mandatePda
         );
-        expect(mandateAfter.isUnlimitedSpend).to.be.false;
-        expect(mandateAfter.limit.toString()).to.equal("2000000");
+        expect(mandateAfter.policy.lifetimeLimit.toString()).to.equal("2000000");
     });
 });
 
@@ -183,53 +214,51 @@ describe("Security: Time Overflow and Frequency Edge Cases", () => {
     const testFactory = TestFactory.getInstance();
     let context: TestContext;
 
-    it("handles extreme debit_frequency_seconds without overflow", async () => {
+    it("handles extreme min_interval_seconds without overflow", async () => {
         context = await testFactory.createTestContext();
 
-        // Create mandate with very large frequency at the maximum allowed value (10 years)
-        // MAX_DEBIT_FREQUENCY_SECONDS = 31_536_000 * 10 = 315_360_000 seconds
         const EXTREME_FREQUENCY = new anchor.BN(315_360_000);
 
         await testFactory.createApprovedFixedMandate(context, {
             amountPerDebit: new anchor.BN(100_000),
-            limit: new anchor.BN(1_000_000),
-            debitFrequencySeconds: EXTREME_FREQUENCY,
+            totalLimit: new anchor.BN(1_000_000),
+            minIntervalSeconds: EXTREME_FREQUENCY,
         });
+        await testFactory.initializeExecutionState(context);
 
-        // Execute first debit - should succeed
         await context.program.methods
-            .executeMandate({ amountToDebit: new anchor.BN(100_000) })
+            .executeMandate({ amountToDebit: new anchor.BN(100_000), nonce: new anchor.BN(1) })
             .accountsPartial({
                 authority: context.authority.publicKey,
                 mandate: context.mandatePda,
+                executionState: context.executionStatePda,
                 mint: context.mint,
-                userTokenAccount: context.userTokenAccount,
-                destinationTokenAccount: context.authorityTokenAccount,
+                senderTokenAccount: context.senderTokenAccount,
+                recipientTokenAccount: context.recipientTokenAccount,
                 tokenProgram: TOKEN_PROGRAM_ID,
-                systemProgram: anchor.web3.SystemProgram.programId,
+                systemProgram: SystemProgram.programId,
             })
             .signers([context.authority])
             .rpc();
 
-        // Immediate second execution should fail with proper error (not overflow)
         try {
             await context.program.methods
-                .executeMandate({ amountToDebit: new anchor.BN(100_000) })
+                .executeMandate({ amountToDebit: new anchor.BN(100_000), nonce: new anchor.BN(2) })
                 .accountsPartial({
                     authority: context.authority.publicKey,
                     mandate: context.mandatePda,
+                    executionState: context.executionStatePda,
                     mint: context.mint,
-                    userTokenAccount: context.userTokenAccount,
-                    destinationTokenAccount: context.authorityTokenAccount,
+                    senderTokenAccount: context.senderTokenAccount,
+                    recipientTokenAccount: context.recipientTokenAccount,
                     tokenProgram: TOKEN_PROGRAM_ID,
-                    systemProgram: anchor.web3.SystemProgram.programId,
+                    systemProgram: SystemProgram.programId,
                 })
                 .signers([context.authority])
                 .rpc();
 
             expect.fail("Should have rejected execution before frequency elapsed");
         } catch (error) {
-            // Should get frequency error, not arithmetic overflow
             expect(error.error?.errorCode?.code || error.error?.code).to.equal(
                 "InsufficientTimeSinceLastDebit"
             );
@@ -244,38 +273,32 @@ describe("Security: Authority Cancel Edge Cases", () => {
     beforeEach(async () => {
         context = await testFactory.createTestContext();
         await testFactory.createApprovedFixedMandate(context, {
-            debitFrequencySeconds: new anchor.BN(1),
+            minIntervalSeconds: new anchor.BN(1),
         });
     });
 
-    it("authority cancel closes mandate (delegation remains until user revokes)", async () => {
-        // Authority can cancel without user signature
-        // Note: Delegation is not explicitly revoked (only owner can revoke), but the
-        // mandate PDA is closed, making any remaining delegation to it useless
+    it("authority cancel closes mandate (delegation remains until sender revokes)", async () => {
         await context.program.methods
             .cancelMandate()
             .accountsPartial({
                 authority: context.authority.publicKey,
-                user: context.user.publicKey,
+                sender: context.sender.publicKey,
+                recipient: context.recipient.publicKey,
                 mandate: context.mandatePda,
                 mint: context.mint,
-                userTokenAccount: context.userTokenAccount,
+                senderTokenAccount: context.senderTokenAccount,
                 tokenProgram: TOKEN_PROGRAM_ID,
-                systemProgram: anchor.web3.SystemProgram.programId,
+                systemProgram: SystemProgram.programId,
             })
             .signers([context.authority])
             .rpc();
 
-        // Mandate account should be closed
         try {
             await context.program.account.mandate.fetch(context.mandatePda);
             expect.fail("Mandate account should be closed");
         } catch (error) {
             expect(error.message).to.include("Account does not exist");
         }
-
-        // Note: Delegation technically remains in token account state (pointing to non-existent PDA)
-        // User can revoke it themselves if desired, but it's harmless since the PDA no longer exists
     });
 });
 
@@ -287,32 +310,29 @@ describe("Security: Mandate ID Reuse", () => {
         const authority = context1.authority;
         const mandateId = context1.mandateId;
 
-        // Create and approve first mandate
         await testFactory.createApprovedFixedMandate(context1);
 
-        // Cancel it (authority can cancel without user signature)
         await context1.program.methods
             .cancelMandate()
             .accountsPartial({
                 authority: context1.authority.publicKey,
-                user: context1.user.publicKey,
+                sender: context1.sender.publicKey,
+                recipient: context1.recipient.publicKey,
                 mandate: context1.mandatePda,
                 mint: context1.mint,
-                userTokenAccount: context1.userTokenAccount,
+                senderTokenAccount: context1.senderTokenAccount,
                 tokenProgram: TOKEN_PROGRAM_ID,
-                systemProgram: anchor.web3.SystemProgram.programId,
+                systemProgram: SystemProgram.programId,
             })
             .signers([context1.authority])
             .rpc();
 
-        // Create new context with SAME authority and SAME mandate ID
-        const user2 = Keypair.generate();
+        const sender2 = Keypair.generate();
         await testFactory.airdropAndConfirm(
-            user2.publicKey,
+            sender2.publicKey,
             2 * anchor.web3.LAMPORTS_PER_SOL
         );
 
-        // Calculate PDA with same authority and mandate ID
         const [mandatePda2] = PublicKey.findProgramAddressSync(
             [
                 Buffer.from("mandate"),
@@ -322,49 +342,55 @@ describe("Security: Mandate ID Reuse", () => {
             context1.program.programId
         );
 
-        // Now mandate is closed, should be able to reuse the ID
-        // Create new user token account for user2
-        const user2TokenAccount = await testFactory.createTokenAccount(
+        const sender2TokenAccount = await testFactory.createTokenAccount(
             context1.mint,
-            user2.publicKey
+            sender2.publicKey,
+            context1.authority
         );
 
-        // This should SUCCEED now because mandate account was closed
+        const now = Math.floor(Date.now() / 1000);
+
         await context1.program.methods
             .createMandate(mandateId, {
+                sender: sender2.publicKey,
+                recipient: context1.recipient.publicKey,
                 amountPerDebit: new anchor.BN(50_000),
-                limit: new anchor.BN(500_000),
+                totalLimit: new anchor.BN(500_000),
                 isUnlimitedSpend: false,
-                debitType: { fixed: {} },
-                debitFrequencySeconds: new anchor.BN(60),
+                chargeType: { fixed: {} },
+                frequency: { daily: {} },
+                minIntervalSeconds: new anchor.BN(60),
+                startAt: new anchor.BN(now - 3600),
+                endAt: new anchor.BN(now + 365 * 86400),
+                allowedRecipients: [],
+                allowedAssets: [],
+                policyHash: Array(32).fill(0).map((_, i) => i === 0 ? 1 : 0),
             })
             .accountsPartial({
                 authority: authority.publicKey,
-                user: user2.publicKey,
+                sender: sender2.publicKey,
+                recipient: context1.recipient.publicKey,
                 mandate: mandatePda2,
                 mint: context1.mint,
-                userTokenAccount: user2TokenAccount,
+                senderTokenAccount: sender2TokenAccount,
                 tokenProgram: TOKEN_PROGRAM_ID,
-                associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
-                systemProgram: anchor.web3.SystemProgram.programId,
+                associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+                systemProgram: SystemProgram.programId,
             })
             .signers([authority])
             .rpc();
 
-        // Verify new mandate was created
         const newMandate = await context1.program.account.mandate.fetch(mandatePda2);
         expect(newMandate.id.toString()).to.equal(mandateId.toString());
-        expect(newMandate.user.toString()).to.equal(user2.publicKey.toString());
+        expect(newMandate.sender.toString()).to.equal(sender2.publicKey.toString());
     });
 
     it("prevents different authority from using same mandate ID", async () => {
         const context1 = await testFactory.createTestContext();
         const context2 = await testFactory.createTestContext();
 
-        // Use same mandate ID
         const sharedMandateId = new anchor.BN(999999);
 
-        // Authority 1 creates mandate
         const [pda1] = PublicKey.findProgramAddressSync(
             [
                 Buffer.from("mandate"),
@@ -376,26 +402,34 @@ describe("Security: Mandate ID Reuse", () => {
 
         await context1.program.methods
             .createMandate(sharedMandateId, {
+                sender: context1.sender.publicKey,
+                recipient: context1.recipient.publicKey,
                 amountPerDebit: new anchor.BN(100_000),
-                limit: new anchor.BN(1_000_000),
+                totalLimit: new anchor.BN(1_000_000),
                 isUnlimitedSpend: false,
-                debitType: { fixed: {} },
-                debitFrequencySeconds: new anchor.BN(60),
+                chargeType: { fixed: {} },
+                frequency: { daily: {} },
+                minIntervalSeconds: new anchor.BN(60),
+                startAt: new anchor.BN(Math.floor(Date.now() / 1000) - 3600),
+                endAt: new anchor.BN(Math.floor(Date.now() / 1000) + 365 * 86400),
+                allowedRecipients: [],
+                allowedAssets: [],
+                policyHash: Array(32).fill(0).map((_, i) => i === 0 ? 1 : 0),
             })
             .accountsPartial({
                 authority: context1.authority.publicKey,
-                user: context1.user.publicKey,
+                sender: context1.sender.publicKey,
+                recipient: context1.recipient.publicKey,
                 mandate: pda1,
                 mint: context1.mint,
-                userTokenAccount: context1.userTokenAccount,
+                senderTokenAccount: context1.senderTokenAccount,
                 tokenProgram: TOKEN_PROGRAM_ID,
-                associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
-                systemProgram: anchor.web3.SystemProgram.programId,
+                associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+                systemProgram: SystemProgram.programId,
             })
             .signers([context1.authority])
             .rpc();
 
-        // Authority 2 creates mandate with same ID - should succeed (different PDA)
         const [pda2] = PublicKey.findProgramAddressSync(
             [
                 Buffer.from("mandate"),
@@ -405,31 +439,38 @@ describe("Security: Mandate ID Reuse", () => {
             context2.program.programId
         );
 
-        // PDAs should be different
         expect(pda1.toString()).to.not.equal(pda2.toString());
 
         await context2.program.methods
             .createMandate(sharedMandateId, {
+                sender: context2.sender.publicKey,
+                recipient: context2.recipient.publicKey,
                 amountPerDebit: new anchor.BN(50_000),
-                limit: new anchor.BN(500_000),
+                totalLimit: new anchor.BN(500_000),
                 isUnlimitedSpend: false,
-                debitType: { variable: {} },
-                debitFrequencySeconds: new anchor.BN(30),
+                chargeType: { variable: {} },
+                frequency: { daily: {} },
+                minIntervalSeconds: new anchor.BN(30),
+                startAt: new anchor.BN(Math.floor(Date.now() / 1000) - 3600),
+                endAt: new anchor.BN(Math.floor(Date.now() / 1000) + 365 * 86400),
+                allowedRecipients: [],
+                allowedAssets: [],
+                policyHash: Array(32).fill(0).map((_, i) => i === 0 ? 1 : 0),
             })
             .accountsPartial({
                 authority: context2.authority.publicKey,
-                user: context2.user.publicKey,
+                sender: context2.sender.publicKey,
+                recipient: context2.recipient.publicKey,
                 mandate: pda2,
                 mint: context2.mint,
-                userTokenAccount: context2.userTokenAccount,
+                senderTokenAccount: context2.senderTokenAccount,
                 tokenProgram: TOKEN_PROGRAM_ID,
-                associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
-                systemProgram: anchor.web3.SystemProgram.programId,
+                associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+                systemProgram: SystemProgram.programId,
             })
             .signers([context2.authority])
             .rpc();
 
-        // Both mandates should exist independently
         const mandate1 = await context1.program.account.mandate.fetch(pda1);
         const mandate2 = await context2.program.account.mandate.fetch(pda2);
 
@@ -444,22 +485,18 @@ describe("Security: Arithmetic Edge Cases", () => {
     it("handles unlimited mandate with large debit amounts", async () => {
         const context = await testFactory.createTestContext();
 
-        // Create unlimited variable mandate with high amount per debit at MAX_DEBIT_AMOUNT
-        // MAX_DEBIT_AMOUNT = u64::MAX / 2
-        const LARGE_AMOUNT = new anchor.BN("9223372036854775807"); // u64::MAX / 2
+        const LARGE_AMOUNT = new anchor.BN("9223372036854775807");
 
         await testFactory.createApprovedUnlimitedMandate(context, {
             amountPerDebit: LARGE_AMOUNT,
-            debitType: { variable: {} },
-            debitFrequencySeconds: new anchor.BN(1),
+            chargeType: { variable: {} },
+            minIntervalSeconds: new anchor.BN(1),
         });
 
         const mandate = await context.program.account.mandate.fetch(context.mandatePda);
 
-        // Verify unlimited allowance is set correctly
-        expect(mandate.limit.toString()).to.equal("18446744073709551615");
-        expect(mandate.isUnlimitedSpend).to.be.true;
-        expect(mandate.amountPerDebit.toString()).to.equal(LARGE_AMOUNT.toString());
+        expect(mandate.policy.lifetimeLimit.toString()).to.equal("18446744073709551615");
+        expect(mandate.policy.perExecutionLimit.toString()).to.equal(LARGE_AMOUNT.toString());
     });
 });
 
@@ -468,19 +505,18 @@ describe("Security: Token Account State Edge Cases", () => {
     let context: TestContext;
 
     beforeEach(async () => {
-        // Create context with freeze authority enabled
         context = await testFactory.createTestContext(true);
         await testFactory.createApprovedFixedMandate(context, {
-            debitFrequencySeconds: new anchor.BN(1),
+            minIntervalSeconds: new anchor.BN(1),
         });
+        await testFactory.initializeExecutionState(context);
     });
 
     it("rejects execution when token account is frozen", async () => {
-        // Freeze the user's token account
         await freezeAccount(
             testFactory.getConnection(),
-            context.authority, // Freeze authority (mint authority)
-            context.userTokenAccount,
+            context.authority,
+            context.senderTokenAccount,
             context.mint,
             context.authority,
             [],
@@ -490,30 +526,29 @@ describe("Security: Token Account State Edge Cases", () => {
 
         try {
             await context.program.methods
-                .executeMandate({ amountToDebit: new anchor.BN(100_000) })
+                .executeMandate({ amountToDebit: new anchor.BN(100_000), nonce: new anchor.BN(1) })
                 .accountsPartial({
                     authority: context.authority.publicKey,
                     mandate: context.mandatePda,
+                    executionState: context.executionStatePda,
                     mint: context.mint,
-                    userTokenAccount: context.userTokenAccount,
-                    destinationTokenAccount: context.authorityTokenAccount,
+                    senderTokenAccount: context.senderTokenAccount,
+                    recipientTokenAccount: context.recipientTokenAccount,
                     tokenProgram: TOKEN_PROGRAM_ID,
-                    systemProgram: anchor.web3.SystemProgram.programId,
+                    systemProgram: SystemProgram.programId,
                 })
                 .signers([context.authority])
                 .rpc();
 
             expect.fail("Should have rejected execution on frozen account");
         } catch (error) {
-            // SPL Token will throw error about frozen account
             expect(error).to.exist;
         }
 
-        // Cleanup: thaw the account for other tests
         await thawAccount(
             testFactory.getConnection(),
             context.authority,
-            context.userTokenAccount,
+            context.senderTokenAccount,
             context.mint,
             context.authority,
             [],
@@ -534,11 +569,8 @@ describe("Security: Multiple Mandates on Same Token Account", () => {
             2 * anchor.web3.LAMPORTS_PER_SOL
         );
 
-        // Create and approve first mandate
         await testFactory.createApprovedFixedMandate(context1);
 
-        // Try to create second mandate with different authority but same user
-        // This should fail because the token account is already delegated
         const mandateId2 = new anchor.BN(Math.floor(Math.random() * 1000000));
         const [mandatePda2] = PublicKey.findProgramAddressSync(
             [
@@ -549,29 +581,55 @@ describe("Security: Multiple Mandates on Same Token Account", () => {
             context1.program.programId
         );
 
+        const now = Math.floor(Date.now() / 1000);
+
+        await context1.program.methods
+            .createMandate(mandateId2, {
+                sender: context1.sender.publicKey,
+                recipient: context1.recipient.publicKey,
+                amountPerDebit: new anchor.BN(50_000),
+                totalLimit: new anchor.BN(500_000),
+                isUnlimitedSpend: false,
+                chargeType: { fixed: {} },
+                frequency: { daily: {} },
+                minIntervalSeconds: new anchor.BN(60),
+                startAt: new anchor.BN(now - 3600),
+                endAt: new anchor.BN(now + 365 * 86400),
+                allowedRecipients: [],
+                allowedAssets: [],
+                policyHash: Array(32).fill(0).map((_, i) => i === 0 ? 1 : 0),
+            })
+            .accountsPartial({
+                authority: authority2.publicKey,
+                sender: context1.sender.publicKey,
+                recipient: context1.recipient.publicKey,
+                mandate: mandatePda2,
+                mint: context1.mint,
+                senderTokenAccount: context1.senderTokenAccount,
+                tokenProgram: TOKEN_PROGRAM_ID,
+                associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+                systemProgram: SystemProgram.programId,
+            })
+            .signers([authority2])
+            .rpc();
+
         try {
             await context1.program.methods
-                .createMandate(mandateId2, {
-                    amountPerDebit: new anchor.BN(50_000),
-                    limit: new anchor.BN(500_000),
-                    isUnlimitedSpend: false,
-                    debitType: { fixed: {} },
-                    debitFrequencySeconds: new anchor.BN(60),
-                })
+                .approveMandate(mandateId2)
                 .accountsPartial({
-                    authority: authority2.publicKey,
-                    user: context1.user.publicKey,
+                    sender: context1.sender.publicKey,
+                    recipient: context1.recipient.publicKey,
                     mandate: mandatePda2,
                     mint: context1.mint,
-                    userTokenAccount: context1.userTokenAccount,
+                    senderTokenAccount: context1.senderTokenAccount,
+                    associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
                     tokenProgram: TOKEN_PROGRAM_ID,
-                    associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
-                    systemProgram: anchor.web3.SystemProgram.programId,
+                    systemProgram: SystemProgram.programId,
                 })
-                .signers([authority2])
+                .signers([context1.sender])
                 .rpc();
 
-            expect.fail("Should have rejected creation - token already delegated");
+            expect.fail("Should have rejected approval - token already delegated");
         } catch (error) {
             expect(error.error?.errorCode?.code).to.equal("TokenAlreadyDelegated");
         }

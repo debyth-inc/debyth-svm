@@ -7,7 +7,7 @@ use anchor_spl::{
 use crate::errors::{MandateError, validation::*};
 use crate::events::MandateModifiedEvent;
 use crate::state::{
-    DebitType, Mandate, MAX_DEBIT_AMOUNT, UNLIMITED_ALLOWANCE,
+    ChargeType, Frequency, Mandate, MandateStatus, Policy, MAX_DEBIT_AMOUNT, UNLIMITED_ALLOWANCE,
 };
 
 #[derive(Accounts)]
@@ -15,29 +15,29 @@ pub struct ModifyMandate<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
-    /// User who approved the mandate - required for updating delegation
-    pub user: Signer<'info>,
+    pub sender: Signer<'info>,
+
+    pub recipient: SystemAccount<'info>,
 
     #[account(
         mut,
         seeds = [b"mandate", authority.key().as_ref(), mandate.id.to_le_bytes().as_ref()],
         bump = mandate.bump,
         constraint = mandate.authority == authority.key() @ MandateError::InvalidAuthority,
-        constraint = mandate.user == user.key() @ MandateError::UnauthorizedUser,
+        constraint = mandate.sender == sender.key() @ MandateError::UnauthorizedSender,
     )]
     pub mandate: Account<'info, Mandate>,
 
     pub mint: Account<'info, Mint>,
 
-    /// User's token account - required for updating delegation
     #[account(
         mut,
         associated_token::mint = mint,
-        associated_token::authority = user,
+        associated_token::authority = sender,
         associated_token::token_program = token_program,
-        constraint = user_token_account.mint == mandate.mint @ MandateError::InvalidMint,
+        constraint = sender_token_account.mint == mandate.mint @ MandateError::InvalidMint,
     )]
-    pub user_token_account: Account<'info, TokenAccount>,
+    pub sender_token_account: Account<'info, TokenAccount>,
 
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub token_program: Program<'info, Token>,
@@ -46,88 +46,108 @@ pub struct ModifyMandate<'info> {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct ModifyMandateArgs {
-    pub new_amount_per_debit: u64,
-    pub new_limit: u64,
-    pub new_is_unlimited_spend: bool,
-    pub new_debit_type: DebitType,
-    pub new_debit_frequency_seconds: u64,
+    pub new_authorized_limit: u64,
+    pub new_charge_type: ChargeType,
+    pub new_frequency: Frequency,
+    pub new_min_interval_seconds: u64,
+    pub new_per_execution_limit: u64,
+    pub new_period_limit: u64,
+    pub new_period_window: u64,
+    pub new_start_at: i64,
+    pub new_end_at: i64,
+    pub new_policy_hash: [u8; 32],
+    pub signature_nonce: u64,
 }
 
 impl<'info> ModifyMandate<'info> {
-    /// Modifies mandate parameters including amount, limit, type, and frequency.
-    ///
-    /// This method allows updating mandate configuration after approval.
-    /// It requires the mandate to be approved and updates the SPL token delegation
-    /// to match the new limit, preventing state inconsistency.
-    ///
-    /// # Security
-    /// - Requires both authority and user signatures
-    /// - Updates token delegation via CPI to match new limit
-    /// - Validates new limit against already debited amount
     pub fn modify(&mut self, args: ModifyMandateArgs) -> Result<()> {
-        // Ensure mandate is approved before allowing modifications
         require!(self.mandate.is_approved, MandateError::MandateNotApproved);
+        require!(self.mandate.status == MandateStatus::Active, MandateError::MandateNotActive);
+        require!(self.mandate.recipient == self.recipient.key(), MandateError::InvalidRecipient);
 
-        // Validate new amount_per_debit bounds
-        validate_debit_amount(args.new_amount_per_debit)?;
+        validate_debit_amount(args.new_per_execution_limit)?;
+        validate_debit_frequency(args.new_min_interval_seconds)?;
 
-        // Validate new debit_frequency_seconds
-        validate_debit_frequency(args.new_debit_frequency_seconds)?;
-
-        // Validate new limit and spend cap relationship
-        validate_spend_cap(args.new_limit, args.new_amount_per_debit, args.new_is_unlimited_spend)?;
-
-        // Validate new limit is not less than already debited amount
-        validate_new_limit(
-            args.new_limit,
-            self.mandate.total_debited_amount,
-            args.new_is_unlimited_spend,
+        validate_policy_timing(
+            args.new_start_at,
+            args.new_end_at,
+            args.new_min_interval_seconds,
+            Clock::get()?.unix_timestamp,
         )?;
 
-        // Additional validation for non-unlimited mandates
-        if !args.new_is_unlimited_spend {
+        validate_spend_cap(
+            args.new_authorized_limit,
+            args.new_per_execution_limit,
+            args.new_authorized_limit == 0,
+        )?;
+
+        validate_new_limit(
+            args.new_authorized_limit,
+            self.mandate.execution_state.total_executed,
+            args.new_authorized_limit == 0,
+        )?;
+
+        if args.new_authorized_limit != 0 {
             require!(
-                args.new_limit <= MAX_DEBIT_AMOUNT,
+                args.new_authorized_limit <= MAX_DEBIT_AMOUNT,
                 MandateError::DebitAmountTooLarge
             );
         }
 
-        // Update mandate fields
-        self.mandate.amount_per_debit = args.new_amount_per_debit;
-        self.mandate.debit_type = args.new_debit_type;
-        self.mandate.is_unlimited_spend = args.new_is_unlimited_spend;
-        self.mandate.debit_frequency_seconds = args.new_debit_frequency_seconds;
+        // Policy constraints may tighten authority but never broaden it
+        if args.new_authorized_limit != 0 && args.new_per_execution_limit > args.new_authorized_limit {
+            return Err(MandateError::PolicyExceedsAuthority.into());
+        }
 
-        let actual_new_limit = if args.new_is_unlimited_spend {
+        require!(
+            args.new_policy_hash != [0u8; 32],
+            MandateError::InvalidPolicyHash
+        );
+
+        require!(
+            args.signature_nonce > self.mandate.modify_signature_nonce,
+            MandateError::SignatureNonceAlreadyUsed
+        );
+
+        let old_policy_hash = self.mandate.policy.policy_hash;
+
+        let effective_limit = if args.new_authorized_limit == 0 {
             UNLIMITED_ALLOWANCE
         } else {
-            args.new_limit
+            args.new_authorized_limit
         };
-        self.mandate.limit = actual_new_limit;
 
-        let now = Clock::get()?.unix_timestamp;
-        self.mandate.updated_at = now;
+        self.mandate.authorized_limit = effective_limit;
+        self.mandate.charge_type = args.new_charge_type;
+        self.mandate.start_at = args.new_start_at;
+        self.mandate.end_at = args.new_end_at;
 
-        // CRITICAL FIX: Update SPL token delegation to match new limit
-        // This prevents state inconsistency between mandate limit and actual delegated amount
+        self.mandate.policy = Policy {
+            frequency: args.new_frequency,
+            min_interval_seconds: args.new_min_interval_seconds,
+            per_execution_limit: args.new_per_execution_limit,
+            period_limit: args.new_period_limit,
+            period_window: args.new_period_window,
+            policy_hash: args.new_policy_hash,
+        };
+
+        self.mandate.modify_signature_nonce = args.signature_nonce;
+
         let cpi_program = self.token_program.to_account_info();
         let cpi_accounts = Approve {
-            to: self.user_token_account.to_account_info(),
+            to: self.sender_token_account.to_account_info(),
             delegate: self.mandate.to_account_info(),
-            authority: self.user.to_account_info(),
+            authority: self.sender.to_account_info(),
         };
-        approve(CpiContext::new(cpi_program, cpi_accounts), actual_new_limit)?;
+        approve(CpiContext::new(cpi_program, cpi_accounts), effective_limit)?;
 
-        // Emit an event to signify the change
         emit!(MandateModifiedEvent {
             mandate_id: self.mandate.id,
-            authority: self.authority.key(),
-            user: self.mandate.user,
-            new_amount_per_debit: args.new_amount_per_debit,
-            new_limit: actual_new_limit,
-            new_is_unlimited_spend: args.new_is_unlimited_spend,
-            new_debit_type: args.new_debit_type,
-            timestamp: now,
+            sender: self.mandate.sender,
+            old_policy_hash,
+            new_policy_hash: args.new_policy_hash,
+            modified_by: self.authority.key(),
+            timestamp: Clock::get()?.unix_timestamp,
         });
 
         Ok(())

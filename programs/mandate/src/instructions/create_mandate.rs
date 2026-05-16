@@ -6,7 +6,7 @@ use anchor_spl::{
 
 use crate::events::MandateCreatedEvent;
 use crate::state::{
-    DebitType, Mandate, MAX_DEBIT_AMOUNT, UNLIMITED_ALLOWANCE,
+    ChargeType, ExecutionState, Frequency, Mandate, MandateStatus, Policy, MAX_DEBIT_AMOUNT, UNLIMITED_ALLOWANCE,
 };
 
 use crate::errors::{MandateError, validation::*};
@@ -17,7 +17,9 @@ pub struct CreateMandate<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
-    pub user: SystemAccount<'info>,
+    pub sender: SystemAccount<'info>,
+
+    pub recipient: SystemAccount<'info>,
 
     #[account(
         init,
@@ -33,10 +35,10 @@ pub struct CreateMandate<'info> {
     #[account(
         mut,
         associated_token::mint = mint,
-        associated_token::authority = user,
+        associated_token::authority = sender,
         associated_token::token_program = token_program,
     )]
-    pub user_token_account: Box<Account<'info, TokenAccount>>,
+    pub sender_token_account: Box<Account<'info, TokenAccount>>,
 
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -45,11 +47,18 @@ pub struct CreateMandate<'info> {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct CreateMandateArgs {
-    pub amount_per_debit: u64,
-    pub limit: u64,
-    pub is_unlimited_spend: bool,
-    pub debit_type: DebitType,
-    pub debit_frequency_seconds: u64,
+    pub sender: Pubkey,
+    pub recipient: Pubkey,
+    pub authorized_limit: u64,
+    pub charge_type: ChargeType,
+    pub frequency: Frequency,
+    pub min_interval_seconds: u64,
+    pub per_execution_limit: u64,
+    pub period_limit: u64,
+    pub period_window: u64,
+    pub start_at: i64,
+    pub end_at: i64,
+    pub policy_hash: [u8; 32],
 }
 
 impl<'info> CreateMandate<'info> {
@@ -59,71 +68,84 @@ impl<'info> CreateMandate<'info> {
         args: CreateMandateArgs,
         bumps: &CreateMandateBumps,
     ) -> Result<()> {
-        // Validate amount_per_debit bounds
-        validate_debit_amount(args.amount_per_debit)?;
+        // Validate policy parameters
+        validate_debit_amount(args.per_execution_limit)?;
+        validate_debit_frequency(args.min_interval_seconds)?;
+        validate_spend_cap(args.authorized_limit, args.per_execution_limit, args.authorized_limit == 0)?;
 
-        // Validate debit_frequency_seconds
-        validate_debit_frequency(args.debit_frequency_seconds)?;
+        // Validate policy timing
+        let now = Clock::get()?.unix_timestamp;
+        validate_policy_timing(
+            args.start_at,
+            args.end_at,
+            args.min_interval_seconds,
+            now,
+        )?;
 
-        // Validate limit and spend cap relationship
-        validate_spend_cap(args.limit, args.amount_per_debit, args.is_unlimited_spend)?;
+        // Validate policy hash is not zero
+        require!(
+            args.policy_hash != [0u8; 32],
+            MandateError::InvalidPolicyHash
+        );
+
+        // Policy constraints may tighten authority but never broaden it
+        if args.authorized_limit != 0 && args.per_execution_limit > args.authorized_limit {
+            return Err(MandateError::PolicyExceedsAuthority.into());
+        }
 
         // Additional validation for non-unlimited mandates
-        if !args.is_unlimited_spend {
+        if args.authorized_limit != 0 {
             require!(
-                args.limit <= MAX_DEBIT_AMOUNT,
+                args.authorized_limit <= MAX_DEBIT_AMOUNT,
                 MandateError::DebitAmountTooLarge
             );
         }
 
-        require!(
-            self.user_token_account.mint == self.mint.key(),
-            MandateError::InvalidMint
-        );
-        require!(
-            self.user_token_account.delegate.is_none(),
-            MandateError::TokenAlreadyDelegated
-        );
-
-        let actual_limit = if args.is_unlimited_spend {
+        let effective_limit = if args.authorized_limit == 0 {
             UNLIMITED_ALLOWANCE
         } else {
-            args.limit
+            args.authorized_limit
         };
 
-        // Initialize the mandate
+        // Initialize the mandate with new structure
         self.mandate.set_inner(Mandate {
             id: mandate_id,
             authority: self.authority.key(),
-            user: self.user.key(),
+            sender: args.sender,
+            recipient: args.recipient,
             bump: bumps.mandate,
             mint: self.mint.key(),
-            amount_per_debit: args.amount_per_debit,
-            limit: actual_limit,
-            total_debited_amount: 0,
-            debit_type: args.debit_type,
-            is_unlimited_spend: args.is_unlimited_spend,
+            authorized_limit: effective_limit,
+            charge_type: args.charge_type,
+            start_at: args.start_at,
+            end_at: args.end_at,
+            policy: Policy {
+                frequency: args.frequency,
+                min_interval_seconds: args.min_interval_seconds,
+                per_execution_limit: args.per_execution_limit,
+                period_limit: args.period_limit,
+                period_window: args.period_window,
+                policy_hash: args.policy_hash,
+            },
+            execution_state: ExecutionState::default(),
+            status: MandateStatus::Pending,
+            created_at: now,
             is_approved: false,
-            is_active: false,
-            last_debit_date: 0,
-            debit_frequency_seconds: args.debit_frequency_seconds,
-            created_at: Clock::get()?.unix_timestamp,
-            updated_at: Clock::get()?.unix_timestamp,
+            modify_signature_nonce: 0,
         });
 
         emit!(MandateCreatedEvent {
-            mandate_id: mandate_id,
-            user: self.user.key(),
+            mandate_id,
+            authority: self.authority.key(),
+            sender: args.sender,
+            recipient: args.recipient,
             mint: self.mint.key(),
-            is_approved: false,
-            is_active: false,
-            created_at: Clock::get()?.unix_timestamp,
-            amount_per_debit: args.amount_per_debit,
-            limit: actual_limit,
-            is_unlimited_spend: args.is_unlimited_spend,
-            debit_type: args.debit_type,
-            debit_frequency_seconds: args.debit_frequency_seconds,
-            timestamp: Clock::get()?.unix_timestamp,
+            authorized_limit: effective_limit,
+            charge_type: args.charge_type as u8,
+            start_at: args.start_at,
+            end_at: args.end_at,
+            policy_hash: args.policy_hash,
+            created_at: now,
         });
 
         Ok(())
