@@ -7,7 +7,6 @@ import {
     createMint,
     mintTo,
     getOrCreateAssociatedTokenAccount,
-    approve,
 } from "@solana/spl-token";
 import { Mandate } from "../target/types/mandate";
 
@@ -23,6 +22,7 @@ export interface TestContext {
     senderTokenAccount: PublicKey;
     recipientTokenAccount: PublicKey;
     executionStatePda: PublicKey;
+    execAdmin: Keypair;
 }
 
 export class TestFactory {
@@ -67,14 +67,12 @@ export class TestFactory {
 
     public async createTokenAccount(
         mint: PublicKey,
-        owner: PublicKey
+        owner: PublicKey,
+        payer: Keypair
     ): Promise<PublicKey> {
-        const ownerKeypair = Keypair.generate();
-        await this.airdropAndConfirm(ownerKeypair.publicKey, anchor.web3.LAMPORTS_PER_SOL);
-
         const tokenAccount = await getOrCreateAssociatedTokenAccount(
             this.connection,
-            ownerKeypair,
+            payer,
             mint,
             owner,
             false,
@@ -82,7 +80,6 @@ export class TestFactory {
             undefined,
             TOKEN_PROGRAM_ID
         );
-
         return tokenAccount.address;
     }
 
@@ -90,12 +87,14 @@ export class TestFactory {
         const authority = Keypair.generate();
         const sender = Keypair.generate();
         const recipient = Keypair.generate();
+        const execAdmin = Keypair.generate();
         const mandateId = new anchor.BN(Math.floor(Math.random() * 1000000));
 
         const SOL_AIRDROP_AMOUNT = 2 * anchor.web3.LAMPORTS_PER_SOL;
         await this.airdropAndConfirm(authority.publicKey, SOL_AIRDROP_AMOUNT);
         await this.airdropAndConfirm(sender.publicKey, SOL_AIRDROP_AMOUNT);
         await this.airdropAndConfirm(recipient.publicKey, SOL_AIRDROP_AMOUNT);
+        await this.airdropAndConfirm(execAdmin.publicKey, SOL_AIRDROP_AMOUNT);
 
         const DECIMALS = 6;
         const mint = await createMint(
@@ -128,14 +127,14 @@ export class TestFactory {
             TOKEN_PROGRAM_ID
         );
 
-        const INITIAL_USER_BALANCE = 1_000_000;
+        const INITIAL_SENDER_BALANCE = 1_000_000;
         await mintTo(
             this.connection,
             authority,
             mint,
             senderTokenAccountInfo.address,
             authority,
-            INITIAL_USER_BALANCE
+            INITIAL_SENDER_BALANCE
         );
 
         const [mandatePda] = PublicKey.findProgramAddressSync(
@@ -160,6 +159,7 @@ export class TestFactory {
             senderTokenAccount: senderTokenAccountInfo.address,
             recipientTokenAccount: recipientTokenAccountInfo.address,
             executionStatePda,
+            execAdmin,
         };
     }
 
@@ -182,7 +182,7 @@ export class TestFactory {
         const now = Math.floor(Date.now() / 1000);
         const DEFAULT_AMOUNT_PER_DEBIT = new anchor.BN(100_000);
         const DEFAULT_LIMIT = new anchor.BN(1_000_000);
-        const DEFAULT_FREQUENCY_SECS = new anchor.BN(60);
+        const DEFAULT_MIN_INTERVAL = new anchor.BN(60);
 
         const {
             amountPerDebit = DEFAULT_AMOUNT_PER_DEBIT,
@@ -190,15 +190,19 @@ export class TestFactory {
             isUnlimitedSpend = false,
             chargeType = { fixed: {} },
             frequency = { daily: {} },
-            minIntervalSeconds = DEFAULT_FREQUENCY_SECS,
+            minIntervalSeconds = DEFAULT_MIN_INTERVAL,
             startAt = new anchor.BN(now - 3600),
             endAt = new anchor.BN(now + 365 * 86400),
             allowedRecipients = [],
             allowedAssets = [],
-            policyHash = Array(32).fill(0),
+            policyHash = null,
         } = options;
 
-        policyHash[0] = 1;
+        const finalPolicyHash = policyHash ?? (() => {
+            const h = new Array(32).fill(0);
+            h[0] = 1;
+            return h;
+        })();
 
         await context.program.methods
             .createMandate(context.mandateId, {
@@ -214,7 +218,7 @@ export class TestFactory {
                 endAt,
                 allowedRecipients,
                 allowedAssets,
-                policyHash,
+                policyHash: finalPolicyHash,
             })
             .accountsPartial({
                 authority: context.authority.publicKey,
@@ -306,5 +310,17 @@ export class TestFactory {
             totalLimit: new anchor.BN(0),
             isUnlimitedSpend: true,
         });
+    }
+
+    public async initializeExecutionState(context: TestContext): Promise<void> {
+        await context.program.methods
+            .initializeExecutionState()
+            .accountsPartial({
+                admin: context.execAdmin.publicKey,
+                executionState: context.executionStatePda,
+                systemProgram: SystemProgram.programId,
+            })
+            .signers([context.execAdmin])
+            .rpc();
     }
 }

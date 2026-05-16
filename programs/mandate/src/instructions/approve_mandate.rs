@@ -11,14 +11,11 @@ use crate::state::{Mandate, MandateStatus, UNLIMITED_ALLOWANCE};
 #[derive(Accounts)]
 #[instruction(mandate_id: u64)]
 pub struct ApproveMandate<'info> {
-    /// The sender who approved the mandate - this account pays for the mandate creation/approval
     #[account(mut)]
     pub sender: Signer<'info>,
 
-    /// The recipient for this mandate
     pub recipient: SystemAccount<'info>,
 
-    /// The new mandate account to be created
     #[account(
         mut,
         seeds = [b"mandate", mandate.authority.key().as_ref(), mandate_id.to_le_bytes().as_ref()],
@@ -26,10 +23,8 @@ pub struct ApproveMandate<'info> {
     )]
     pub mandate: Account<'info, Mandate>,
 
-    /// The token mint for the mandate
     pub mint: Account<'info, Mint>,
 
-    /// The sender's token account that will be debited
     #[account(
         init_if_needed,
         payer = sender,
@@ -47,23 +42,19 @@ pub struct ApproveMandate<'info> {
 
 impl<'info> ApproveMandate<'info> {
     pub fn approve(&mut self) -> Result<()> {
-        // Validate that the sender actually matches the mandate sender
         require!(
             self.sender.key() == self.mandate.sender,
             MandateError::UnauthorizedSender
         );
 
-        // Validate recipient matches mandate recipient
         require!(
             self.recipient.key() == self.mandate.recipient,
             MandateError::InvalidRecipient
         );
 
-        // Validate mandate state
         require!(!self.mandate.is_approved, MandateError::AlreadyApproved);
         require!(self.mandate.status == MandateStatus::Pending, MandateError::MandateNotPending);
 
-        // Validate token account
         require!(
             self.sender_token_account.owner == self.sender.key(),
             MandateError::InvalidTokenAccount
@@ -77,12 +68,6 @@ impl<'info> ApproveMandate<'info> {
             MandateError::TokenAlreadyDelegated
         );
 
-        // SECURITY FIX 1: Update the state BEFORE external call
-        self.mandate.is_approved = true;
-        self.mandate.status = MandateStatus::Active;
-        self.mandate.last_period_timestamp = Clock::get()?.unix_timestamp;
-
-        // Approve token delegation
         let cpi_program = self.token_program.to_account_info();
         let cpi_accounts = Approve {
             to: self.sender_token_account.to_account_info(),
@@ -90,22 +75,24 @@ impl<'info> ApproveMandate<'info> {
             delegate: self.mandate.to_account_info(),
         };
 
-        let amount = if self.mandate.policy.lifetime_limit == UNLIMITED_ALLOWANCE {
+        let amount = if self.mandate.authorized_limit == UNLIMITED_ALLOWANCE {
             UNLIMITED_ALLOWANCE
         } else {
-            self.mandate.policy.lifetime_limit
+            self.mandate.authorized_limit
         };
         approve(CpiContext::new(cpi_program, cpi_accounts), amount)?;
 
-        // Emit approval event for monitoring
+        self.mandate.is_approved = true;
+        self.mandate.status = MandateStatus::Active;
+
         emit!(MandateApprovedEvent {
             mandate_id: self.mandate.id,
             sender: self.mandate.sender,
             recipient: self.mandate.recipient,
             mint: self.mandate.mint,
-            total_limit: self.mandate.policy.lifetime_limit,
+            authorized_limit: self.mandate.authorized_limit,
             per_execution_limit: self.mandate.policy.per_execution_limit,
-            policy_hash: self.mandate.policy_hash,
+            policy_hash: self.mandate.policy.policy_hash,
             created_at: self.mandate.created_at,
         });
 

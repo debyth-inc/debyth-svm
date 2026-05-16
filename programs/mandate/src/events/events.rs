@@ -3,14 +3,15 @@ use anchor_lang::prelude::*;
 #[event]
 pub struct MandateCreatedEvent {
     pub mandate_id: u64,
+    pub authority: Pubkey,
     pub sender: Pubkey,
     pub recipient: Pubkey,
     pub mint: Pubkey,
-    pub total_limit: u64,
-    pub per_execution_limit: u64,
-    pub policy_hash: [u8; 32],
+    pub authorized_limit: u64,
+    pub charge_type: u8,
     pub start_at: i64,
     pub end_at: i64,
+    pub policy_hash: [u8; 32],
     pub created_at: i64,
 }
 
@@ -21,7 +22,7 @@ pub struct MandateExecutedEvent {
     pub recipient: Pubkey,
     pub mint: Pubkey,
     pub amount: u64,
-    pub total_charged: u64,
+    pub total_executed: u64,
     pub timestamp: i64,
     pub nonce: u64,
     pub policy_hash: [u8; 32],
@@ -41,7 +42,7 @@ pub struct MandateApprovedEvent {
     pub sender: Pubkey,
     pub recipient: Pubkey,
     pub mint: Pubkey,
-    pub total_limit: u64,
+    pub authorized_limit: u64,
     pub per_execution_limit: u64,
     pub policy_hash: [u8; 32],
     pub created_at: i64,
@@ -67,7 +68,6 @@ pub struct MandateResumedEvent {
 pub struct MandateModifiedEvent {
     pub mandate_id: u64,
     pub sender: Pubkey,
-    pub recipient: Pubkey,
     pub old_policy_hash: [u8; 32],
     pub new_policy_hash: [u8; 32],
     pub modified_by: Pubkey,
@@ -86,3 +86,10 @@ pub struct ExecutionResumedEvent {
     pub timestamp: i64,
 }
 
+#[event]
+pub struct MandateEmergencyCancelledEvent {
+    pub mandate_id: u64,
+    pub sender: Pubkey,
+    pub cancelled_by: Pubkey,
+    pub timestamp: i64,
+}

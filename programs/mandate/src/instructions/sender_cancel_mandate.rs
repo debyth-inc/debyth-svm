@@ -6,24 +6,23 @@ use crate::events::MandateCancelledEvent;
 use crate::state::{Mandate, MandateStatus};
 
 #[derive(Accounts)]
-pub struct CancelMandate<'info> {
-    /// Authority who created the mandate - can always cancel to reclaim rent
+pub struct SenderCancelMandate<'info> {
     #[account(mut)]
-    pub authority: Signer<'info>,
+    pub sender: Signer<'info>,
 
-    /// Sender account (not required to sign - authority can cancel unilaterally)
-    pub sender: SystemAccount<'info>,
+    pub authority: SystemAccount<'info>,
 
-    /// Recipient account
     pub recipient: SystemAccount<'info>,
 
     #[account(
         mut,
-        close = authority,
+        close = sender,
         seeds = [b"mandate", authority.key().as_ref(), mandate.id.to_le_bytes().as_ref()],
         bump = mandate.bump,
         constraint = mandate.authority == authority.key() @ MandateError::InvalidAuthority,
         constraint = mandate.sender == sender.key() @ MandateError::UnauthorizedSender,
+        constraint = mandate.status != MandateStatus::Cancelled @ MandateError::MandateNotActive,
+        constraint = mandate.status != MandateStatus::Complete @ MandateError::MandateNotActive,
     )]
     pub mandate: Account<'info, Mandate>,
 
@@ -32,7 +31,7 @@ pub struct CancelMandate<'info> {
     #[account(
         mut,
         associated_token::mint = mint,
-        associated_token::authority = mandate.sender,
+        associated_token::authority = sender,
         associated_token::token_program = token_program,
     )]
     pub sender_token_account: Account<'info, TokenAccount>,
@@ -41,29 +40,19 @@ pub struct CancelMandate<'info> {
     pub system_program: Program<'info, System>,
 }
 
-impl<'info> CancelMandate<'info> {
+impl<'info> SenderCancelMandate<'info> {
     pub fn cancel(&mut self) -> Result<()> {
         let now = Clock::get()?.unix_timestamp;
 
-        // Update mandate status before closing
         self.mandate.status = MandateStatus::Cancelled;
 
-        // Note: We don't explicitly revoke the delegation here because:
-        // 1. Only the token account owner (sender) can revoke a delegation, not the delegate
-        // 2. When the mandate PDA is closed, it ceases to exist
-        // 3. A delegation to a non-existent account is effectively useless
-        // 4. The sender can always revoke the delegation themselves via their wallet
-
-        // Emit cancellation event before account is closed
         emit!(MandateCancelledEvent {
             mandate_id: self.mandate.id,
             sender: self.sender.key(),
-            cancelled_by: self.authority.key(),
+            cancelled_by: self.sender.key(),
             timestamp: now,
         });
 
-        // Mandate account is automatically closed via 'close' constraint
-        // Rent refund goes to authority (they paid for account creation)
         Ok(())
     }
 }

@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 use crate::errors::MandateError;
 use crate::events::ExecutionResumedEvent;
-use crate::state::ExecutionState;
+use crate::state::ExecutionStateGlobal;
 
 #[derive(Accounts)]
 pub struct ResumeExecution<'info> {
@@ -11,10 +11,10 @@ pub struct ResumeExecution<'info> {
 
     #[account(
         mut,
-        seeds = [ExecutionState::SEED_PREFIX],
+        seeds = [ExecutionStateGlobal::SEED_PREFIX],
         bump,
     )]
-    pub execution_state: Account<'info, ExecutionState>,
+    pub execution_state: Account<'info, ExecutionStateGlobal>,
 }
 
 impl<'info> ResumeExecution<'info> {

@@ -67,6 +67,9 @@ pub enum MandateError {
     #[msg("Invalid spend cap: limit must be at least as large as amount_per_debit")]
     InvalidSpendCap = 6401,
 
+    #[msg("Policy exceeds authority: per_execution_limit cannot exceed authorized_limit")]
+    PolicyExceedsAuthority = 6402,
+
     // === Time/Frequency Errors (6500-6599) ===
     #[msg("Insufficient time since last debit: min_interval_seconds has not elapsed")]
     InsufficientTimeSinceLastDebit = 6500,
@@ -109,6 +112,13 @@ pub enum MandateError {
 
     #[msg("Execution state authority mismatch: only the execution authority can pause or resume")]
     ExecutionStateAuthorityMismatch = 6901,
+
+    // === Signature/Replay Errors (6950-6999) ===
+    #[msg("Invalid sender signature: signature does not match mandate sender")]
+    InvalidSenderSignature = 6950,
+
+    #[msg("Signature nonce already used: nonce must be strictly increasing")]
+    SignatureNonceAlreadyUsed = 6951,
 
     // === Arithmetic/Overflow Errors (6800-6899) ===
     #[msg("Arithmetic overflow in time calculation")]

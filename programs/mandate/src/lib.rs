@@ -1,4 +1,3 @@
-#![allow(deprecated, unexpected_cfgs)]
 use anchor_lang::prelude::*;
 
 declare_id!("EzScVWXcCYzcpLKhFg6U3uA1VugCnN3mLauqtb4MhNRg");
@@ -12,6 +11,7 @@ use instructions::*;
 
 pub mod events;
 
+#[allow(deprecated)]
 #[program]
 pub mod mandate {
     use super::*;
@@ -50,6 +50,11 @@ pub mod mandate {
         Ok(())
     }
 
+    pub fn initialize_execution_state(ctx: Context<InitializeExecutionState>) -> Result<()> {
+        ctx.accounts.initialize()?;
+        Ok(())
+    }
+
     pub fn pause_execution(ctx: Context<PauseExecution>) -> Result<()> {
         ctx.accounts.pause_execution()?;
         Ok(())
@@ -57,6 +62,16 @@ pub mod mandate {
 
     pub fn resume_execution(ctx: Context<ResumeExecution>) -> Result<()> {
         ctx.accounts.resume_execution()?;
+        Ok(())
+    }
+
+    pub fn sender_cancel_mandate(ctx: Context<SenderCancelMandate>) -> Result<()> {
+        ctx.accounts.cancel()?;
+        Ok(())
+    }
+
+    pub fn emergency_cancel_mandate(ctx: Context<EmergencyCancelMandate>) -> Result<()> {
+        ctx.accounts.emergency_cancel()?;
         Ok(())
     }
 }

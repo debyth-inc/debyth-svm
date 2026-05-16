@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 use crate::errors::MandateError;
 use crate::events::ExecutionPausedEvent;
-use crate::state::ExecutionState;
+use crate::state::ExecutionStateGlobal;
 
 #[derive(Accounts)]
 pub struct PauseExecution<'info> {
@@ -10,31 +10,17 @@ pub struct PauseExecution<'info> {
     pub authority: Signer<'info>,
 
     #[account(
-        init_if_needed,
-        payer = authority,
-        space = 8 + ExecutionState::INIT_SPACE,
-        seeds = [ExecutionState::SEED_PREFIX],
+        mut,
+        seeds = [ExecutionStateGlobal::SEED_PREFIX],
         bump,
+        constraint = execution_state.authority == authority.key() @ MandateError::ExecutionStateAuthorityMismatch,
     )]
-    pub execution_state: Account<'info, ExecutionState>,
-
-    pub system_program: Program<'info, System>,
+    pub execution_state: Account<'info, ExecutionStateGlobal>,
 }
 
 impl<'info> PauseExecution<'info> {
     pub fn pause_execution(&mut self) -> Result<()> {
-        let execution_state = &mut self.execution_state;
-
-        if execution_state.authority == Pubkey::default() {
-            execution_state.authority = self.authority.key();
-        } else {
-            require!(
-                execution_state.authority == self.authority.key(),
-                MandateError::ExecutionStateAuthorityMismatch
-            );
-        }
-
-        execution_state.paused = true;
+        self.execution_state.paused = true;
 
         let now = Clock::get()?.unix_timestamp;
 
